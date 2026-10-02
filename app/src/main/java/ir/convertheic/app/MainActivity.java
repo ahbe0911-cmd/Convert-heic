@@ -3,6 +3,8 @@ package ir.convertheic.app;
 import com.bumptech.glide.integration.heif.HeifBitmapFactory;
 
 import android.app.Activity;
+import android.animation.AnimatorSet;
+import android.animation.ObjectAnimator;
 import android.content.ClipData;
 import android.content.ContentResolver;
 import android.content.Intent;
@@ -26,6 +28,7 @@ import android.util.Size;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.animation.OvershootInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -74,6 +77,7 @@ public class MainActivity extends Activity {
     private boolean zipMode = true;
     private volatile boolean cancelRequested = false;
     private int screenMode = 0; // 0 home, 1 progress, 2 success
+    private Typeface vazir;
 
     private LinearLayout selectedThumbs;
     private TextView selectedSummary;
@@ -97,6 +101,11 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         }
+        try {
+            vazir = getResources().getFont(R.font.vazirmatn);
+        } catch (Throwable ignored) {
+            vazir = Typeface.DEFAULT;
+        }
         showHome(false);
     }
 
@@ -104,99 +113,146 @@ public class MainActivity extends Activity {
         screenMode = 0;
         cancelRequested = false;
         View view = buildHome();
-        showScreen(view, animate);
+        showScreen(view, false);
         refreshSelection();
         refreshOptionCards();
+        animateHome(view);
     }
 
     private View buildHome() {
-        ScrollView scroll = baseScroll();
-        LinearLayout root = baseRoot();
-        scroll.addView(root);
+        final boolean compact = getResources().getConfiguration().screenHeightDp < 720;
 
-        root.addView(buildBrandHeader(), fullWidth());
+        LinearLayout root = baseRoot();
+        root.setPadding(dp(12), dp(compact ? 8 : 12), dp(12), dp(compact ? 8 : 12));
+        root.setBackgroundColor(BG);
+
+        LinearLayout.LayoutParams headerParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 88 : 100));
+        root.addView(buildBrandHeader(), headerParams);
 
         LinearLayout pickCard = whiteCard();
-        LinearLayout.LayoutParams pickCardParams = fullWidth();
-        pickCardParams.topMargin = dp(14);
+        pickCard.setPadding(dp(10), dp(10), dp(10), dp(8));
+        LinearLayout.LayoutParams pickCardParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 136 : 148));
+        pickCardParams.topMargin = dp(8);
         root.addView(pickCard, pickCardParams);
 
-        TextView selectBox = new TextView(this);
-        selectBox.setText("▣  ＋\nانتخاب فایل‌های HEIC / HEIF\nچندین عکس را همزمان انتخاب کنید");
-        selectBox.setTextColor(TEXT);
-        selectBox.setTextSize(15);
-        selectBox.setGravity(Gravity.CENTER);
-        selectBox.setTypeface(null, Typeface.BOLD);
-        selectBox.setPadding(dp(14), dp(24), dp(14), dp(24));
-        GradientDrawable dashed = new GradientDrawable();
-        dashed.setColor(Color.rgb(251, 251, 255));
-        dashed.setCornerRadius(dp(20));
-        dashed.setStroke(dp(2), Color.rgb(170, 178, 255), dp(7), dp(5));
-        selectBox.setBackground(dashed);
-        selectBox.setOnClickListener(v -> openPicker());
-        pickCard.addView(selectBox, fullWidth());
+        LinearLayout selector = new LinearLayout(this);
+        selector.setOrientation(LinearLayout.HORIZONTAL);
+        selector.setGravity(Gravity.CENTER_VERTICAL);
+        selector.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        selector.setPadding(dp(14), dp(8), dp(14), dp(8));
+        GradientDrawable selectorBg = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{Color.rgb(248, 250, 255), Color.rgb(246, 241, 255)});
+        selectorBg.setCornerRadius(dp(18));
+        selectorBg.setStroke(dp(2), Color.rgb(181, 190, 255), dp(7), dp(5));
+        selector.setBackground(selectorBg);
+        selector.setOnClickListener(v -> {
+            pulse(selector);
+            openPicker();
+        });
+        pickCard.addView(selector, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 72 : 80)));
+
+        TextView add = new TextView(this);
+        add.setText("＋");
+        add.setTextColor(Color.WHITE);
+        add.setTextSize(compact ? 24 : 28);
+        add.setGravity(Gravity.CENTER);
+        add.setTypeface(null, Typeface.BOLD);
+        add.setBackground(gradient(BLUE, PURPLE, 16));
+        LinearLayout.LayoutParams addP = new LinearLayout.LayoutParams(dp(40), dp(40));
+        addP.leftMargin = dp(10);
+        selector.addView(add, addP);
+
+        LinearLayout selectText = new LinearLayout(this);
+        selectText.setOrientation(LinearLayout.VERTICAL);
+        selectText.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        selector.addView(selectText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+
+        TextView selectTitle = new TextView(this);
+        selectTitle.setText("انتخاب فایل‌های HEIC / HEIF");
+        selectTitle.setTextColor(TEXT);
+        selectTitle.setTextSize(compact ? 14 : 15);
+        selectTitle.setGravity(Gravity.END);
+        selectTitle.setTypeface(null, Typeface.BOLD);
+        selectText.addView(selectTitle, fullWidth());
+
+        TextView selectSub = new TextView(this);
+        selectSub.setText("چندین عکس را همزمان انتخاب کنید");
+        selectSub.setTextColor(MUTED);
+        selectSub.setTextSize(compact ? 10.5f : 11.5f);
+        selectSub.setGravity(Gravity.END);
+        selectText.addView(selectSub, fullWidth());
 
         LinearLayout selectedRow = new LinearLayout(this);
         selectedRow.setOrientation(LinearLayout.HORIZONTAL);
         selectedRow.setGravity(Gravity.CENTER_VERTICAL);
         selectedRow.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-        selectedRow.setPadding(dp(10), dp(12), dp(10), 0);
-        pickCard.addView(selectedRow, fullWidth());
+        selectedRow.setPadding(dp(4), dp(5), dp(4), 0);
+        pickCard.addView(selectedRow, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 48 : 52)));
 
         selectedThumbs = new LinearLayout(this);
         selectedThumbs.setOrientation(LinearLayout.HORIZONTAL);
         selectedThumbs.setGravity(Gravity.CENTER_VERTICAL);
-        selectedRow.addView(selectedThumbs, new LinearLayout.LayoutParams(0, dp(60), 1f));
+        selectedRow.addView(selectedThumbs, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
         selectedSummary = new TextView(this);
         selectedSummary.setTextColor(TEXT);
-        selectedSummary.setTextSize(14);
+        selectedSummary.setTextSize(compact ? 11.5f : 12.5f);
         selectedSummary.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         selectedSummary.setTypeface(null, Typeface.BOLD);
         selectedSummary.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        selectedRow.addView(selectedSummary, new LinearLayout.LayoutParams(dp(145), dp(60)));
+        selectedRow.addView(selectedSummary, new LinearLayout.LayoutParams(dp(compact ? 126 : 140), ViewGroup.LayoutParams.MATCH_PARENT));
 
         addSectionTitle(root, "کیفیت خروجی");
         LinearLayout qualityRow = optionRow();
         root.addView(qualityRow, fullWidth());
-        quality480Card = optionCard("◉", "حجم حدود ۴۸۰KB", "مناسب برای اشتراک‌گذاری", false,
-                v -> { target480Mode = true; refreshOptionCards(); });
-        qualityMaxCard = optionCard("◆", "کیفیت حداکثری", "بهترین کیفیت تصویر", true,
-                v -> { target480Mode = false; refreshOptionCards(); });
+        quality480Card = optionCard("۴۸۰", "حجم حدود ۴۸۰KB", "کم‌حجم و مناسب اشتراک", GREEN, false,
+                v -> { target480Mode = true; refreshOptionCards(); pulse(quality480Card); });
+        qualityMaxCard = optionCard("◆", "کیفیت حداکثری", "بالاترین کیفیت تصویر", PURPLE, true,
+                v -> { target480Mode = false; refreshOptionCards(); pulse(qualityMaxCard); });
         qualityRow.addView(quality480Card, weightedCard(true));
         qualityRow.addView(qualityMaxCard, weightedCard(false));
 
         addSectionTitle(root, "نوع خروجی");
         LinearLayout outputRow = optionRow();
         root.addView(outputRow, fullWidth());
-        outputZipCard = optionCard("ZIP", "خروجی ZIP", "همه تصاویر در یک فایل", true,
-                v -> { zipMode = true; refreshOptionCards(); });
-        outputFolderCard = optionCard("▰", "ذخیره در پوشه", "ذخیره جداگانه JPGها", false,
-                v -> { zipMode = false; refreshOptionCards(); });
+        outputZipCard = optionCard("ZIP", "خروجی ZIP", "همه تصاویر در یک فایل", BLUE, true,
+                v -> { zipMode = true; refreshOptionCards(); pulse(outputZipCard); });
+        outputFolderCard = optionCard("▰", "ذخیره در پوشه", "JPGهای جداگانه", Color.rgb(255, 157, 55), false,
+                v -> { zipMode = false; refreshOptionCards(); pulse(outputFolderCard); });
         outputRow.addView(outputZipCard, weightedCard(true));
         outputRow.addView(outputFolderCard, weightedCard(false));
 
-        TextView convert = primaryAction("↻   تبدیل و ساخت خروجی   ›");
-        LinearLayout.LayoutParams convertParams = fullWidth();
-        convertParams.topMargin = dp(18);
+        TextView convert = primaryAction("تبدیل و ساخت خروجی   ←");
+        LinearLayout.LayoutParams convertParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 50 : 56));
+        convertParams.topMargin = dp(9);
         root.addView(convert, convertParams);
-        convert.setOnClickListener(v -> startConversionFlow());
+        convert.setOnClickListener(v -> {
+            pulse(convert);
+            startConversionFlow();
+        });
 
-        TextView privacy = smallText("🔒  پردازش کاملاً آفلاین\nفایل‌های شما فقط روی دستگاه خودتان پردازش می‌شوند");
+        TextView privacy = smallText("🔒  پردازش کاملاً آفلاین • فایل‌ها از دستگاه خارج نمی‌شوند");
         privacy.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams privacyParams = fullWidth();
-        privacyParams.topMargin = dp(13);
-        privacyParams.bottomMargin = dp(14);
+        privacy.setTextSize(compact ? 9.5f : 10.5f);
+        LinearLayout.LayoutParams privacyParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 24 : 28));
+        privacyParams.topMargin = dp(4);
         root.addView(privacy, privacyParams);
 
-        return scroll;
+        return root;
     }
 
     private View buildBrandHeader() {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(18), dp(20), dp(18), dp(20));
+        header.setPadding(dp(14), dp(10), dp(14), dp(10));
         header.setBackground(gradient(BLUE, PURPLE, 26));
         header.setElevation(dp(7));
         header.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
@@ -209,7 +265,7 @@ public class MainActivity extends Activity {
         TextView brand = new TextView(this);
         brand.setText("ZipPix");
         brand.setTextColor(Color.WHITE);
-        brand.setTextSize(30);
+        brand.setTextSize(26);
         brand.setGravity(Gravity.END);
         brand.setTypeface(null, Typeface.BOLD);
         textBox.addView(brand, fullWidth());
@@ -217,7 +273,7 @@ public class MainActivity extends Activity {
         TextView title = new TextView(this);
         title.setText("مبدل HEIC به JPG");
         title.setTextColor(Color.WHITE);
-        title.setTextSize(16);
+        title.setTextSize(14);
         title.setGravity(Gravity.END);
         title.setTypeface(null, Typeface.BOLD);
         textBox.addView(title, fullWidth());
@@ -225,7 +281,7 @@ public class MainActivity extends Activity {
         TextView sub = new TextView(this);
         sub.setText("تبدیل سریع، گروهی و آفلاین تصاویر");
         sub.setTextColor(Color.argb(215, 255, 255, 255));
-        sub.setTextSize(12.5f);
+        sub.setTextSize(10.5f);
         sub.setGravity(Gravity.END);
         LinearLayout.LayoutParams sp = fullWidth();
         sp.topMargin = dp(4);
@@ -236,7 +292,7 @@ public class MainActivity extends Activity {
         icon.setScaleType(ImageView.ScaleType.CENTER_CROP);
         icon.setBackground(roundRect(Color.WHITE, 19));
         icon.setClipToOutline(true);
-        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(78), dp(78));
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(66), dp(66));
         ip.leftMargin = dp(14);
         header.addView(icon, ip);
 
@@ -247,12 +303,12 @@ public class MainActivity extends Activity {
         TextView t = new TextView(this);
         t.setText(title);
         t.setTextColor(TEXT);
-        t.setTextSize(17);
+        t.setTextSize(15.5f);
         t.setTypeface(null, Typeface.BOLD);
         t.setGravity(Gravity.END);
         LinearLayout.LayoutParams p = fullWidth();
-        p.topMargin = dp(18);
-        p.bottomMargin = dp(9);
+        p.topMargin = dp(9);
+        p.bottomMargin = dp(5);
         root.addView(t, p);
     }
 
@@ -264,44 +320,50 @@ public class MainActivity extends Activity {
     }
 
     private LinearLayout.LayoutParams weightedCard(boolean left) {
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(132), 1f);
-        if (left) p.rightMargin = dp(6); else p.leftMargin = dp(6);
+        boolean compact = getResources().getConfiguration().screenHeightDp < 720;
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(compact ? 92 : 102), 1f);
+        if (left) p.rightMargin = dp(5); else p.leftMargin = dp(5);
         return p;
     }
 
-    private LinearLayout optionCard(String icon, String title, String sub, boolean selected, View.OnClickListener click) {
+    private LinearLayout optionCard(String icon, String title, String sub, int tint, boolean selected, View.OnClickListener click) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setGravity(Gravity.CENTER);
-        box.setPadding(dp(8), dp(12), dp(8), dp(10));
+        box.setPadding(dp(6), dp(7), dp(6), dp(6));
         box.setOnClickListener(click);
 
         TextView i = new TextView(this);
         i.setText(icon);
-        i.setTextSize(icon.equals("ZIP") ? 13 : 26);
+        i.setTextSize(icon.length() > 2 ? 11.5f : 20f);
         i.setGravity(Gravity.CENTER);
-        i.setTextColor(selected ? PURPLE : MUTED);
+        i.setTextColor(Color.WHITE);
         i.setTypeface(null, Typeface.BOLD);
-        box.addView(i, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
+        i.setBackground(roundRect(tint, 13));
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(42), dp(34));
+        ip.gravity = Gravity.CENTER_HORIZONTAL;
+        box.addView(i, ip);
 
         TextView t = new TextView(this);
         t.setText(title);
-        t.setTextSize(14);
+        t.setTextSize(12.8f);
         t.setTextColor(TEXT);
         t.setGravity(Gravity.CENTER);
         t.setTypeface(null, Typeface.BOLD);
-        box.addView(t, fullWidth());
+        LinearLayout.LayoutParams tp = fullWidth();
+        tp.topMargin = dp(4);
+        box.addView(t, tp);
 
         TextView s = new TextView(this);
         s.setText(sub);
-        s.setTextSize(11.5f);
+        s.setTextSize(9.8f);
         s.setTextColor(MUTED);
         s.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams sp = fullWidth();
-        sp.topMargin = dp(4);
+        sp.topMargin = dp(1);
         box.addView(s, sp);
 
-        box.setTag(new TextView[]{i, t, s});
+        box.setTag(new OptionStyle(i, tint));
         applyOptionStyle(box, selected);
         return box;
     }
@@ -315,13 +377,13 @@ public class MainActivity extends Activity {
     }
 
     private void applyOptionStyle(LinearLayout card, boolean selected) {
-        card.setBackground(optionBackground(selected));
-        card.setElevation(selected ? dp(5) : dp(1));
         Object tag = card.getTag();
-        if (tag instanceof TextView[]) {
-            TextView[] views = (TextView[]) tag;
-            views[0].setTextColor(selected ? PURPLE : MUTED);
-        }
+        int tint = PURPLE;
+        if (tag instanceof OptionStyle) tint = ((OptionStyle) tag).tint;
+        card.setBackground(optionBackground(selected, tint));
+        card.setElevation(selected ? dp(4) : dp(1));
+        card.setScaleX(selected ? 1.0f : 0.985f);
+        card.setScaleY(selected ? 1.0f : 0.985f);
     }
 
     private void refreshSelection() {
@@ -332,11 +394,11 @@ public class MainActivity extends Activity {
             selectedSummary.setText("هنوز فایلی انتخاب نشده");
             TextView empty = new TextView(this);
             empty.setText("＋");
-            empty.setTextSize(24);
+            empty.setTextSize(20);
             empty.setTextColor(Color.rgb(170, 175, 194));
             empty.setGravity(Gravity.CENTER);
             empty.setBackground(roundRect(Color.rgb(239, 242, 251), 14));
-            selectedThumbs.addView(empty, new LinearLayout.LayoutParams(dp(52), dp(52)));
+            selectedThumbs.addView(empty, new LinearLayout.LayoutParams(dp(40), dp(40)));
             return;
         }
 
@@ -351,7 +413,7 @@ public class MainActivity extends Activity {
             iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
             iv.setBackground(roundRect(Color.rgb(231, 235, 248), 13));
             iv.setClipToOutline(true);
-            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(52), dp(52));
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(40), dp(40));
             p.rightMargin = dp(5);
             selectedThumbs.addView(iv, p);
             thumbnailExecutor.execute(() -> {
@@ -368,7 +430,7 @@ public class MainActivity extends Activity {
             more.setGravity(Gravity.CENTER);
             more.setTypeface(null, Typeface.BOLD);
             more.setBackground(roundRect(Color.rgb(239, 235, 255), 13));
-            selectedThumbs.addView(more, new LinearLayout.LayoutParams(dp(52), dp(52)));
+            selectedThumbs.addView(more, new LinearLayout.LayoutParams(dp(40), dp(40)));
         }
     }
 
@@ -1125,12 +1187,19 @@ public class MainActivity extends Activity {
         return d;
     }
 
-    private GradientDrawable optionBackground(boolean selected) {
+    private GradientDrawable optionBackground(boolean selected, int tint) {
         GradientDrawable d = new GradientDrawable();
-        d.setColor(selected ? Color.rgb(250, 249, 255) : Color.WHITE);
+        d.setColor(blendWithWhite(tint, selected ? 0.90f : 0.96f));
         d.setCornerRadius(dp(18));
-        d.setStroke(dp(selected ? 2 : 1), selected ? PURPLE : Color.rgb(229, 232, 242));
+        d.setStroke(dp(selected ? 2 : 1), selected ? tint : blendWithWhite(tint, 0.72f));
         return d;
+    }
+
+    private int blendWithWhite(int color, float whiteRatio) {
+        int r = Math.round(Color.red(color) * (1f - whiteRatio) + 255 * whiteRatio);
+        int g = Math.round(Color.green(color) * (1f - whiteRatio) + 255 * whiteRatio);
+        int b = Math.round(Color.blue(color) * (1f - whiteRatio) + 255 * whiteRatio);
+        return Color.rgb(r, g, b);
     }
 
     private LinearLayout.LayoutParams fullWidth() {
@@ -1138,11 +1207,57 @@ public class MainActivity extends Activity {
     }
 
     private void showScreen(View view, boolean animate) {
+        applyVazir(view);
         setContentView(view);
         if (animate) {
             view.setAlpha(0f);
-            view.setTranslationY(dp(12));
+            view.setTranslationY(dp(10));
             view.animate().alpha(1f).translationY(0).setDuration(220).start();
+        }
+    }
+
+    private void applyVazir(View view) {
+        if (view instanceof TextView) {
+            TextView tv = (TextView) view;
+            int style = tv.getTypeface() == null ? Typeface.NORMAL : tv.getTypeface().getStyle();
+            tv.setTypeface(vazir == null ? Typeface.DEFAULT : vazir, style);
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup vg = (ViewGroup) view;
+            for (int i = 0; i < vg.getChildCount(); i++) applyVazir(vg.getChildAt(i));
+        }
+    }
+
+    private void pulse(View view) {
+        if (view == null) return;
+        AnimatorSet set = new AnimatorSet();
+        ObjectAnimator sx1 = ObjectAnimator.ofFloat(view, View.SCALE_X, view.getScaleX(), 1.035f);
+        ObjectAnimator sy1 = ObjectAnimator.ofFloat(view, View.SCALE_Y, view.getScaleY(), 1.035f);
+        ObjectAnimator sx2 = ObjectAnimator.ofFloat(view, View.SCALE_X, 1.035f, 1f);
+        ObjectAnimator sy2 = ObjectAnimator.ofFloat(view, View.SCALE_Y, 1.035f, 1f);
+        sx1.setDuration(105); sy1.setDuration(105); sx2.setDuration(180); sy2.setDuration(180);
+        AnimatorSet up = new AnimatorSet();
+        up.playTogether(sx1, sy1);
+        AnimatorSet down = new AnimatorSet();
+        down.playTogether(sx2, sy2);
+        set.playSequentially(up, down);
+        set.setInterpolator(new OvershootInterpolator(1.35f));
+        set.start();
+    }
+
+    private void animateHome(View view) {
+        if (!(view instanceof ViewGroup)) return;
+        ViewGroup group = (ViewGroup) view;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            child.setAlpha(0f);
+            child.setTranslationY(dp(10));
+            child.animate()
+                    .alpha(1f)
+                    .translationY(0f)
+                    .setStartDelay(i * 45L)
+                    .setDuration(260)
+                    .start();
         }
     }
 
@@ -1173,6 +1288,15 @@ public class MainActivity extends Activity {
         executor.shutdownNow();
         thumbnailExecutor.shutdownNow();
         super.onDestroy();
+    }
+
+    private static final class OptionStyle {
+        final TextView icon;
+        final int tint;
+        OptionStyle(TextView icon, int tint) {
+            this.icon = icon;
+            this.tint = tint;
+        }
     }
 
     private static final class EncodedJpeg {

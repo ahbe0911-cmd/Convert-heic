@@ -10,8 +10,8 @@ android {
         applicationId 'ir.convertheic.app'
         minSdk 26
         targetSdk 35
-        versionCode 4
-        versionName '1.3.0'
+        versionCode 5
+        versionName '1.4.0'
     }
 
     compileOptions {
@@ -33,22 +33,25 @@ android {
     }
 }
 
-tasks.register("decodeZipPixIcon") {
-    def inputFile = rootProject.file("branding/zippix_icon_256.b64")
-    def outputFile = file("$buildDir/generated/res/zippix/drawable/zippix_icon.webp")
+tasks.register("decodeZipPixAssets") {
+    def iconInput = rootProject.file("branding/zippix_icon_256.b64")
+    def iconOutput = file("$buildDir/generated/res/zippix/drawable/zippix_icon.webp")
+    def fontInput = rootProject.file("branding/vazirmatn.ttf.b64")
+    def fontOutput = file("$buildDir/generated/res/zippix/font/vazirmatn.ttf")
 
-    inputs.file(inputFile)
-    outputs.file(outputFile)
+    inputs.files(iconInput, fontInput)
+    outputs.files(iconOutput, fontOutput)
 
     doLast {
-        outputFile.parentFile.mkdirs()
-        byte[] decoded = java.util.Base64.decoder.decode(inputFile.text.trim())
-        outputFile.bytes = decoded
+        iconOutput.parentFile.mkdirs()
+        iconOutput.bytes = java.util.Base64.decoder.decode(iconInput.text.replaceAll("\\s",""))
+        fontOutput.parentFile.mkdirs()
+        fontOutput.bytes = java.util.Base64.decoder.decode(fontInput.text.replaceAll("\\s",""))
     }
 }
 
 tasks.named("preBuild").configure {
-    dependsOn("decodeZipPixIcon")
+    dependsOn("decodeZipPixAssets")
 }
 
 dependencies {

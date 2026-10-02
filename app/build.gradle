@@ -55,6 +55,9 @@ tasks.named("preBuild").configure {
 }
 
 dependencies {
-    implementation 'com.github.msisuzney.GlideHeifDecoder:heifdecoder:0.5'
+    implementation('com.github.msisuzney.GlideHeifDecoder:heifdecoder:0.5') {
+        exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk7'
+        exclude group: 'org.jetbrains.kotlin', module: 'kotlin-stdlib-jdk8'
+    }
     implementation 'androidx.core:core:1.15.0'
 }

@@ -135,17 +135,17 @@ public class MainActivity extends Activity {
         final boolean compact = getResources().getConfiguration().screenHeightDp < 700;
 
         LinearLayout root = baseRoot();
-        root.setPadding(dp(12), dp(compact ? 7 : 10), dp(12), dp(compact ? 7 : 10));
+        root.setPadding(dp(12), dp(compact ? 14 : 18), dp(12), dp(compact ? 12 : 16));
         root.setBackgroundColor(BG);
 
         LinearLayout.LayoutParams headerParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 82 : 90));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 88 : 96));
         root.addView(buildBrandHeader(), headerParams);
 
         LinearLayout pickCard = whiteCard();
         pickCard.setPadding(dp(9), dp(9), dp(9), dp(7));
         LinearLayout.LayoutParams pickCardParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 118 : 128));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 112 : 122));
         pickCardParams.topMargin = dp(7);
         root.addView(pickCard, pickCardParams);
 
@@ -165,7 +165,7 @@ public class MainActivity extends Activity {
             openPicker();
         });
         pickCard.addView(selector, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 61 : 66)));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 58 : 63)));
 
         TextView add = new TextView(this);
         add.setText("＋");
@@ -184,7 +184,7 @@ public class MainActivity extends Activity {
         selector.addView(selectText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
         TextView selectTitle = new TextView(this);
-        selectTitle.setText("انتخاب HEIC / HEIF");
+        selectTitle.setText("انتخاب \u2066HEIC / HEIF\u2069");
         selectTitle.setTextColor(TEXT);
         selectTitle.setTextSize(compact ? 13.3f : 14.3f);
         selectTitle.setGravity(Gravity.END);
@@ -201,15 +201,18 @@ public class MainActivity extends Activity {
         LinearLayout selectedRow = new LinearLayout(this);
         selectedRow.setOrientation(LinearLayout.HORIZONTAL);
         selectedRow.setGravity(Gravity.CENTER_VERTICAL);
-        selectedRow.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        selectedRow.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
         selectedRow.setPadding(dp(3), dp(4), dp(3), 0);
         pickCard.addView(selectedRow, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 42 : 46)));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 41 : 45)));
 
         selectedThumbs = new LinearLayout(this);
         selectedThumbs.setOrientation(LinearLayout.HORIZONTAL);
         selectedThumbs.setGravity(Gravity.CENTER_VERTICAL);
-        selectedRow.addView(selectedThumbs, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        LinearLayout.LayoutParams thumbsLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        thumbsLp.leftMargin = dp(8);
+        selectedRow.addView(selectedThumbs, thumbsLp);
 
         selectedSummary = new TextView(this);
         selectedSummary.setTextColor(TEXT);
@@ -217,12 +220,13 @@ public class MainActivity extends Activity {
         selectedSummary.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         selectedSummary.setTypeface(null, Typeface.BOLD);
         selectedSummary.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        selectedRow.addView(selectedSummary, new LinearLayout.LayoutParams(dp(compact ? 118 : 132), ViewGroup.LayoutParams.MATCH_PARENT));
+        selectedRow.addView(selectedSummary, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
         addSectionTitle(root, "کیفیت خروجی");
         LinearLayout qualityRow = optionRow();
         root.addView(qualityRow, fullWidth());
-        quality490Card = optionCard("۴۹۰", "Smart 490", "سقف ۴۹۰KB • کیفیت بالا", GREEN, false,
+        quality490Card = optionCard("۴۹۰", "\u2066Smart 490\u2069", "سقف ۴۹۰KB • کیفیت بالا", GREEN, false,
                 v -> { target490Mode = true; refreshOptionCards(); pulse(quality490Card); });
         qualityMaxCard = optionCard("HQ", "کیفیت حداکثری", "رزولوشن اصلی", PURPLE, true,
                 v -> { target490Mode = false; refreshOptionCards(); pulse(qualityMaxCard); });
@@ -248,12 +252,12 @@ public class MainActivity extends Activity {
         smartInfo.setOrientation(LinearLayout.HORIZONTAL);
         smartInfo.setGravity(Gravity.CENTER_VERTICAL);
         smartInfo.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        smartInfo.setPadding(dp(12), dp(8), dp(12), dp(8));
+        smartInfo.setPadding(dp(12), dp(10), dp(12), dp(10));
         smartInfo.setBackground(gradient(Color.rgb(239, 248, 255), Color.rgb(246, 241, 255), 18));
         LinearLayout.LayoutParams infoLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
-        infoLp.topMargin = dp(8);
-        infoLp.bottomMargin = dp(8);
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        infoLp.topMargin = dp(7);
+        infoLp.bottomMargin = dp(7);
         root.addView(smartInfo, infoLp);
 
         TextView infoBadge = new TextView(this);
@@ -273,11 +277,14 @@ public class MainActivity extends Activity {
         info.setTextSize(compact ? 9.4f : 10.3f);
         info.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         info.setMaxLines(3);
-        smartInfo.addView(info, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        smartInfo.addView(info, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         convertActionButton = primaryAction("تبدیل و ارسال مستقیم به بله   ←");
         LinearLayout.LayoutParams convertParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 50 : 54));
+        convertParams.topMargin = dp(2);
+        convertParams.bottomMargin = dp(2);
         root.addView(convertActionButton, convertParams);
         convertActionButton.setOnClickListener(v -> {
             pulse(convertActionButton);
@@ -288,7 +295,7 @@ public class MainActivity extends Activity {
         privacy.setGravity(Gravity.CENTER);
         privacy.setTextSize(compact ? 9.1f : 10f);
         LinearLayout.LayoutParams privacyParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 22 : 25));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 20 : 23));
         privacyParams.topMargin = dp(3);
         root.addView(privacy, privacyParams);
 
@@ -299,7 +306,7 @@ public class MainActivity extends Activity {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(13), dp(7), dp(13), dp(7));
+        header.setPadding(dp(14), dp(10), dp(14), dp(9));
         header.setBackground(gradient(BLUE, PURPLE, 24));
         header.setElevation(dp(6));
         header.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
@@ -312,15 +319,15 @@ public class MainActivity extends Activity {
         TextView brand = new TextView(this);
         brand.setText("ZipPix");
         brand.setTextColor(Color.WHITE);
-        brand.setTextSize(24);
+        brand.setTextSize(23);
         brand.setGravity(Gravity.END);
         brand.setTypeface(null, Typeface.BOLD);
         textBox.addView(brand, fullWidth());
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("HEIC → JPG  •  تبدیل هوشمند و آفلاین");
+        subtitle.setText("\u2066HEIC → JPG\u2069  •  تبدیل هوشمند و آفلاین");
         subtitle.setTextColor(Color.argb(225, 255, 255, 255));
-        subtitle.setTextSize(11);
+        subtitle.setTextSize(10.5f);
         subtitle.setGravity(Gravity.END);
         subtitle.setSingleLine(true);
         LinearLayout.LayoutParams sp = fullWidth();
@@ -332,7 +339,7 @@ public class MainActivity extends Activity {
         icon.setScaleType(ImageView.ScaleType.CENTER_CROP);
         icon.setBackground(roundRect(Color.WHITE, 17));
         icon.setClipToOutline(true);
-        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(58), dp(58));
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(56), dp(56));
         ip.leftMargin = dp(12);
         header.addView(icon, ip);
 
@@ -361,17 +368,17 @@ public class MainActivity extends Activity {
 
     private LinearLayout.LayoutParams weightedCard(boolean left) {
         boolean compact = getResources().getConfiguration().screenHeightDp < 700;
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(compact ? 78 : 86), 1f);
-        if (left) p.rightMargin = dp(5); else p.leftMargin = dp(5);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(compact ? 80 : 86), 1f);
+        if (left) p.rightMargin = dp(4); else p.leftMargin = dp(4);
         return p;
     }
 
     private LinearLayout.LayoutParams tripleCard(int index) {
         boolean compact = getResources().getConfiguration().screenHeightDp < 700;
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(compact ? 77 : 84), 1f);
-        if (index == 0) p.rightMargin = dp(4);
-        if (index == 1) { p.leftMargin = dp(2); p.rightMargin = dp(2); }
-        if (index == 2) p.leftMargin = dp(4);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(compact ? 80 : 86), 1f);
+        if (index == 0) p.rightMargin = dp(3);
+        if (index == 1) { p.leftMargin = dp(3); p.rightMargin = dp(3); }
+        if (index == 2) p.leftMargin = dp(3);
         return p;
     }
 
@@ -383,21 +390,25 @@ public class MainActivity extends Activity {
         box.setOnClickListener(click);
 
         TextView i = new TextView(this);
-        i.setText(icon);
+        i.setText(icon.equals("▰") ? "" : icon);
         i.setTextSize(icon.length() > 2 ? 10.5f : 16.5f);
         i.setGravity(Gravity.CENTER);
         i.setTextColor(Color.WHITE);
         i.setTypeface(null, Typeface.BOLD);
         i.setBackground(roundRect(tint, 13));
+        if (icon.equals("▰")) {
+            i.setCompoundDrawablesWithIntrinsicBounds(0, 0, R.drawable.ic_folder, 0);
+        }
         LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(40), dp(30));
         ip.gravity = Gravity.CENTER_HORIZONTAL;
         box.addView(i, ip);
 
         TextView t = new TextView(this);
         t.setText(title);
-        t.setTextSize(11.6f);
+        t.setTextSize(11.8f);
         t.setTextColor(TEXT);
         t.setGravity(Gravity.CENTER);
+        t.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
         t.setTypeface(null, Typeface.BOLD);
         LinearLayout.LayoutParams tp = fullWidth();
         tp.topMargin = dp(4);
@@ -405,9 +416,10 @@ public class MainActivity extends Activity {
 
         TextView s = new TextView(this);
         s.setText(sub);
-        s.setTextSize(8.9f);
+        s.setTextSize(9.1f);
         s.setTextColor(MUTED);
         s.setGravity(Gravity.CENTER);
+        s.setTextDirection(View.TEXT_DIRECTION_FIRST_STRONG);
         LinearLayout.LayoutParams sp = fullWidth();
         sp.topMargin = dp(1);
         box.addView(s, sp);
@@ -441,9 +453,10 @@ public class MainActivity extends Activity {
         int tint = PURPLE;
         if (tag instanceof OptionStyle) tint = ((OptionStyle) tag).tint;
         card.setBackground(optionBackground(selected, tint));
-        card.setElevation(selected ? dp(4) : dp(1));
-        card.setScaleX(selected ? 1.0f : 0.985f);
-        card.setScaleY(selected ? 1.0f : 0.985f);
+        card.setElevation(dp(1));
+        card.setScaleX(1.0f);
+        card.setScaleY(1.0f);
+        card.setClipToOutline(true);
     }
 
     private void refreshSelection() {
@@ -1454,9 +1467,10 @@ public class MainActivity extends Activity {
 
     private GradientDrawable optionBackground(boolean selected, int tint) {
         GradientDrawable d = new GradientDrawable();
-        d.setColor(blendWithWhite(tint, selected ? 0.90f : 0.96f));
+        d.setColor(selected ? blendWithWhite(tint, 0.92f) : Color.WHITE);
         d.setCornerRadius(dp(18));
-        d.setStroke(dp(selected ? 2 : 1), selected ? tint : blendWithWhite(tint, 0.72f));
+        d.setStroke(dp(selected ? 2 : 1),
+                selected ? tint : Color.rgb(228, 232, 241));
         return d;
     }
 

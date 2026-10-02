@@ -2,6 +2,9 @@ package ir.convertheic.app;
 
 import com.bumptech.glide.integration.heif.HeifBitmapFactory;
 import androidx.core.content.FileProvider;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 import android.app.Activity;
 import android.animation.AnimatorSet;
@@ -135,7 +138,21 @@ public class MainActivity extends Activity {
         final boolean compact = getResources().getConfiguration().screenHeightDp < 700;
 
         LinearLayout root = baseRoot();
-        root.setPadding(dp(12), dp(compact ? 14 : 18), dp(12), dp(compact ? 12 : 16));
+        final int horizontalPadding = dp(12);
+        final int extraTopPadding = dp(18);
+        final int bottomPadding = dp(compact ? 12 : 16);
+        root.setPadding(horizontalPadding, extraTopPadding, horizontalPadding, bottomPadding);
+        ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
+            Insets safeArea = insets.getInsets(
+                    WindowInsetsCompat.Type.statusBars() | WindowInsetsCompat.Type.displayCutout());
+            v.setPadding(
+                    safeArea.left + horizontalPadding,
+                    safeArea.top + extraTopPadding,
+                    safeArea.right + horizontalPadding,
+                    bottomPadding);
+            return insets;
+        });
+        ViewCompat.requestApplyInsets(root);
         root.setBackgroundColor(BG);
 
         LinearLayout.LayoutParams headerParams = new LinearLayout.LayoutParams(

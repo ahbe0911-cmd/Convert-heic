@@ -1,6 +1,7 @@
 package ir.convertheic.app;
 
 import com.bumptech.glide.integration.heif.HeifBitmapFactory;
+import androidx.core.content.FileProvider;
 
 import android.app.Activity;
 import android.animation.AnimatorSet;
@@ -38,6 +39,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -74,8 +77,13 @@ public class MainActivity extends Activity {
     private final ExecutorService thumbnailExecutor = Executors.newFixedThreadPool(2);
     private final ArrayList<TextView> progressStatuses = new ArrayList<>();
 
+    private static final int OUTPUT_BALE = 0;
+    private static final int OUTPUT_ZIP = 1;
+    private static final int OUTPUT_FOLDER = 2;
+
     private boolean target490Mode = false;
-    private boolean zipMode = true;
+    private int outputMode = OUTPUT_BALE;
+    private int lastResultMode = OUTPUT_BALE;
     private volatile boolean cancelRequested = false;
     private int screenMode = 0; // 0 home, 1 progress, 2 success
     private Typeface vazir;
@@ -84,8 +92,10 @@ public class MainActivity extends Activity {
     private TextView selectedSummary;
     private LinearLayout qualityMaxCard;
     private LinearLayout quality490Card;
+    private LinearLayout outputBaleCard;
     private LinearLayout outputZipCard;
     private LinearLayout outputFolderCard;
+    private TextView convertActionButton;
 
     private RingProgress ringProgress;
 
@@ -93,6 +103,7 @@ public class MainActivity extends Activity {
     private boolean lastWasZip;
     private String lastOutputName = "";
     private long lastOutputBytes = 0L;
+    private final ArrayList<Uri> lastShareUris = new ArrayList<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -121,49 +132,49 @@ public class MainActivity extends Activity {
     }
 
     private View buildHome() {
-        final boolean compact = getResources().getConfiguration().screenHeightDp < 720;
+        final boolean compact = getResources().getConfiguration().screenHeightDp < 700;
 
         LinearLayout root = baseRoot();
-        root.setPadding(dp(12), dp(compact ? 8 : 12), dp(12), dp(compact ? 8 : 12));
+        root.setPadding(dp(12), dp(compact ? 7 : 10), dp(12), dp(compact ? 7 : 10));
         root.setBackgroundColor(BG);
 
         LinearLayout.LayoutParams headerParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 88 : 100));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 82 : 90));
         root.addView(buildBrandHeader(), headerParams);
 
         LinearLayout pickCard = whiteCard();
-        pickCard.setPadding(dp(10), dp(10), dp(10), dp(8));
+        pickCard.setPadding(dp(9), dp(9), dp(9), dp(7));
         LinearLayout.LayoutParams pickCardParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 136 : 148));
-        pickCardParams.topMargin = dp(8);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 118 : 128));
+        pickCardParams.topMargin = dp(7);
         root.addView(pickCard, pickCardParams);
 
         LinearLayout selector = new LinearLayout(this);
         selector.setOrientation(LinearLayout.HORIZONTAL);
         selector.setGravity(Gravity.CENTER_VERTICAL);
         selector.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        selector.setPadding(dp(14), dp(8), dp(14), dp(8));
+        selector.setPadding(dp(12), dp(6), dp(12), dp(6));
         GradientDrawable selectorBg = new GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
-                new int[]{Color.rgb(248, 250, 255), Color.rgb(246, 241, 255)});
+                new int[]{Color.rgb(248, 251, 255), Color.rgb(247, 242, 255)});
         selectorBg.setCornerRadius(dp(18));
-        selectorBg.setStroke(dp(2), Color.rgb(181, 190, 255), dp(7), dp(5));
+        selectorBg.setStroke(dp(2), Color.rgb(179, 190, 255), dp(7), dp(5));
         selector.setBackground(selectorBg);
         selector.setOnClickListener(v -> {
             pulse(selector);
             openPicker();
         });
         pickCard.addView(selector, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 72 : 80)));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 61 : 66)));
 
         TextView add = new TextView(this);
         add.setText("＋");
         add.setTextColor(Color.WHITE);
-        add.setTextSize(compact ? 24 : 28);
+        add.setTextSize(compact ? 22 : 25);
         add.setGravity(Gravity.CENTER);
         add.setTypeface(null, Typeface.BOLD);
-        add.setBackground(gradient(BLUE, PURPLE, 16));
-        LinearLayout.LayoutParams addP = new LinearLayout.LayoutParams(dp(40), dp(40));
+        add.setBackground(gradient(BLUE, PURPLE, 15));
+        LinearLayout.LayoutParams addP = new LinearLayout.LayoutParams(dp(44), dp(44));
         addP.leftMargin = dp(10);
         selector.addView(add, addP);
 
@@ -173,17 +184,17 @@ public class MainActivity extends Activity {
         selector.addView(selectText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
         TextView selectTitle = new TextView(this);
-        selectTitle.setText("انتخاب فایل‌های HEIC / HEIF");
+        selectTitle.setText("انتخاب HEIC / HEIF");
         selectTitle.setTextColor(TEXT);
-        selectTitle.setTextSize(compact ? 14 : 15);
+        selectTitle.setTextSize(compact ? 13.3f : 14.3f);
         selectTitle.setGravity(Gravity.END);
         selectTitle.setTypeface(null, Typeface.BOLD);
         selectText.addView(selectTitle, fullWidth());
 
         TextView selectSub = new TextView(this);
-        selectSub.setText("چندین عکس را همزمان انتخاب کنید");
+        selectSub.setText("چند عکس را همزمان انتخاب کنید");
         selectSub.setTextColor(MUTED);
-        selectSub.setTextSize(compact ? 10.5f : 11.5f);
+        selectSub.setTextSize(compact ? 9.8f : 10.8f);
         selectSub.setGravity(Gravity.END);
         selectText.addView(selectSub, fullWidth());
 
@@ -191,9 +202,9 @@ public class MainActivity extends Activity {
         selectedRow.setOrientation(LinearLayout.HORIZONTAL);
         selectedRow.setGravity(Gravity.CENTER_VERTICAL);
         selectedRow.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
-        selectedRow.setPadding(dp(4), dp(5), dp(4), 0);
+        selectedRow.setPadding(dp(3), dp(4), dp(3), 0);
         pickCard.addView(selectedRow, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 48 : 52)));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 42 : 46)));
 
         selectedThumbs = new LinearLayout(this);
         selectedThumbs.setOrientation(LinearLayout.HORIZONTAL);
@@ -202,48 +213,83 @@ public class MainActivity extends Activity {
 
         selectedSummary = new TextView(this);
         selectedSummary.setTextColor(TEXT);
-        selectedSummary.setTextSize(compact ? 11.5f : 12.5f);
+        selectedSummary.setTextSize(compact ? 10.5f : 11.5f);
         selectedSummary.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         selectedSummary.setTypeface(null, Typeface.BOLD);
         selectedSummary.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        selectedRow.addView(selectedSummary, new LinearLayout.LayoutParams(dp(compact ? 126 : 140), ViewGroup.LayoutParams.MATCH_PARENT));
+        selectedRow.addView(selectedSummary, new LinearLayout.LayoutParams(dp(compact ? 118 : 132), ViewGroup.LayoutParams.MATCH_PARENT));
 
         addSectionTitle(root, "کیفیت خروجی");
         LinearLayout qualityRow = optionRow();
         root.addView(qualityRow, fullWidth());
-        quality490Card = optionCard("۴۹۰", "حداکثر ۴۹۰KB", "کیفیت بالا • سقف قطعی حجم", GREEN, false,
+        quality490Card = optionCard("۴۹۰", "Smart 490", "سقف ۴۹۰KB • کیفیت بالا", GREEN, false,
                 v -> { target490Mode = true; refreshOptionCards(); pulse(quality490Card); });
-        qualityMaxCard = optionCard("◆", "کیفیت حداکثری", "بالاترین کیفیت تصویر", PURPLE, true,
+        qualityMaxCard = optionCard("HQ", "کیفیت حداکثری", "رزولوشن اصلی", PURPLE, true,
                 v -> { target490Mode = false; refreshOptionCards(); pulse(qualityMaxCard); });
         qualityRow.addView(quality490Card, weightedCard(true));
         qualityRow.addView(qualityMaxCard, weightedCard(false));
 
-        addSectionTitle(root, "نوع خروجی");
+        addSectionTitle(root, "ارسال و ذخیره");
         LinearLayout outputRow = optionRow();
         root.addView(outputRow, fullWidth());
-        outputZipCard = optionCard("ZIP", "خروجی ZIP", "همه تصاویر در یک فایل", BLUE, true,
-                v -> { zipMode = true; refreshOptionCards(); pulse(outputZipCard); });
-        outputFolderCard = optionCard("▰", "ذخیره در پوشه", "JPGهای جداگانه", Color.rgb(255, 157, 55), false,
-                v -> { zipMode = false; refreshOptionCards(); pulse(outputFolderCard); });
-        outputRow.addView(outputZipCard, weightedCard(true));
-        outputRow.addView(outputFolderCard, weightedCard(false));
 
-        TextView convert = primaryAction("تبدیل و ساخت خروجی   ←");
+        outputBaleCard = optionCard("بله", "اشتراک بله", "پیش‌فرض", Color.rgb(23, 160, 210), true,
+                v -> { outputMode = OUTPUT_BALE; refreshOptionCards(); pulse(outputBaleCard); });
+        outputZipCard = optionCard("ZIP", "فایل ZIP", "همه در یک فایل", BLUE, false,
+                v -> { outputMode = OUTPUT_ZIP; refreshOptionCards(); pulse(outputZipCard); });
+        outputFolderCard = optionCard("▰", "پوشه", "JPG جداگانه", Color.rgb(255, 157, 55), false,
+                v -> { outputMode = OUTPUT_FOLDER; refreshOptionCards(); pulse(outputFolderCard); });
+
+        outputRow.addView(outputBaleCard, tripleCard(0));
+        outputRow.addView(outputZipCard, tripleCard(1));
+        outputRow.addView(outputFolderCard, tripleCard(2));
+
+        LinearLayout smartInfo = new LinearLayout(this);
+        smartInfo.setOrientation(LinearLayout.HORIZONTAL);
+        smartInfo.setGravity(Gravity.CENTER_VERTICAL);
+        smartInfo.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        smartInfo.setPadding(dp(12), dp(8), dp(12), dp(8));
+        smartInfo.setBackground(gradient(Color.rgb(239, 248, 255), Color.rgb(246, 241, 255), 18));
+        LinearLayout.LayoutParams infoLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+        infoLp.topMargin = dp(8);
+        infoLp.bottomMargin = dp(8);
+        root.addView(smartInfo, infoLp);
+
+        TextView infoBadge = new TextView(this);
+        infoBadge.setText("SMART");
+        infoBadge.setTextColor(Color.WHITE);
+        infoBadge.setTextSize(9.5f);
+        infoBadge.setTypeface(null, Typeface.BOLD);
+        infoBadge.setGravity(Gravity.CENTER);
+        infoBadge.setBackground(gradient(GREEN, BLUE, 12));
+        LinearLayout.LayoutParams badgeLp = new LinearLayout.LayoutParams(dp(58), dp(34));
+        badgeLp.leftMargin = dp(10);
+        smartInfo.addView(infoBadge, badgeLp);
+
+        TextView info = new TextView(this);
+        info.setText("فشرده‌سازی هوشمند: ابتدا کیفیت JPEG بهینه می‌شود؛ فقط در صورت نیاز ابعاد به‌صورت تدریجی کاهش می‌یابد.");
+        info.setTextColor(Color.rgb(63, 72, 103));
+        info.setTextSize(compact ? 9.4f : 10.3f);
+        info.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        info.setMaxLines(3);
+        smartInfo.addView(info, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+
+        convertActionButton = primaryAction("تبدیل و ارسال مستقیم به بله   ←");
         LinearLayout.LayoutParams convertParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 50 : 56));
-        convertParams.topMargin = dp(9);
-        root.addView(convert, convertParams);
-        convert.setOnClickListener(v -> {
-            pulse(convert);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 50 : 54));
+        root.addView(convertActionButton, convertParams);
+        convertActionButton.setOnClickListener(v -> {
+            pulse(convertActionButton);
             startConversionFlow();
         });
 
-        TextView privacy = smallText("🔒  پردازش کاملاً آفلاین • فایل‌ها از دستگاه خارج نمی‌شوند");
+        TextView privacy = smallText("🔒 آفلاین • بدون آپلود • فایل اصلی دست‌نخورده می‌ماند");
         privacy.setGravity(Gravity.CENTER);
-        privacy.setTextSize(compact ? 9.5f : 10.5f);
+        privacy.setTextSize(compact ? 9.1f : 10f);
         LinearLayout.LayoutParams privacyParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 24 : 28));
-        privacyParams.topMargin = dp(4);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(compact ? 22 : 25));
+        privacyParams.topMargin = dp(3);
         root.addView(privacy, privacyParams);
 
         return root;
@@ -253,48 +299,41 @@ public class MainActivity extends Activity {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setPadding(dp(14), dp(10), dp(14), dp(10));
-        header.setBackground(gradient(BLUE, PURPLE, 26));
-        header.setElevation(dp(7));
+        header.setPadding(dp(13), dp(7), dp(13), dp(7));
+        header.setBackground(gradient(BLUE, PURPLE, 24));
+        header.setElevation(dp(6));
         header.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
 
         LinearLayout textBox = new LinearLayout(this);
         textBox.setOrientation(LinearLayout.VERTICAL);
-        textBox.setGravity(Gravity.END);
-        header.addView(textBox, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        textBox.setGravity(Gravity.CENTER_VERTICAL | Gravity.END);
+        header.addView(textBox, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
 
         TextView brand = new TextView(this);
         brand.setText("ZipPix");
         brand.setTextColor(Color.WHITE);
-        brand.setTextSize(26);
+        brand.setTextSize(24);
         brand.setGravity(Gravity.END);
         brand.setTypeface(null, Typeface.BOLD);
         textBox.addView(brand, fullWidth());
 
-        TextView title = new TextView(this);
-        title.setText("مبدل HEIC به JPG");
-        title.setTextColor(Color.WHITE);
-        title.setTextSize(14);
-        title.setGravity(Gravity.END);
-        title.setTypeface(null, Typeface.BOLD);
-        textBox.addView(title, fullWidth());
-
-        TextView sub = new TextView(this);
-        sub.setText("تبدیل سریع، گروهی و آفلاین تصاویر");
-        sub.setTextColor(Color.argb(215, 255, 255, 255));
-        sub.setTextSize(10.5f);
-        sub.setGravity(Gravity.END);
+        TextView subtitle = new TextView(this);
+        subtitle.setText("HEIC → JPG  •  تبدیل هوشمند و آفلاین");
+        subtitle.setTextColor(Color.argb(225, 255, 255, 255));
+        subtitle.setTextSize(11);
+        subtitle.setGravity(Gravity.END);
+        subtitle.setSingleLine(true);
         LinearLayout.LayoutParams sp = fullWidth();
-        sp.topMargin = dp(4);
-        textBox.addView(sub, sp);
+        sp.topMargin = dp(1);
+        textBox.addView(subtitle, sp);
 
         ImageView icon = new ImageView(this);
         icon.setImageResource(R.drawable.zippix_icon);
         icon.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        icon.setBackground(roundRect(Color.WHITE, 19));
+        icon.setBackground(roundRect(Color.WHITE, 17));
         icon.setClipToOutline(true);
-        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(66), dp(66));
-        ip.leftMargin = dp(14);
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(58), dp(58));
+        ip.leftMargin = dp(12);
         header.addView(icon, ip);
 
         return header;
@@ -308,8 +347,8 @@ public class MainActivity extends Activity {
         t.setTypeface(null, Typeface.BOLD);
         t.setGravity(Gravity.END);
         LinearLayout.LayoutParams p = fullWidth();
-        p.topMargin = dp(9);
-        p.bottomMargin = dp(5);
+        p.topMargin = dp(7);
+        p.bottomMargin = dp(4);
         root.addView(t, p);
     }
 
@@ -321,9 +360,18 @@ public class MainActivity extends Activity {
     }
 
     private LinearLayout.LayoutParams weightedCard(boolean left) {
-        boolean compact = getResources().getConfiguration().screenHeightDp < 720;
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(compact ? 92 : 102), 1f);
+        boolean compact = getResources().getConfiguration().screenHeightDp < 700;
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(compact ? 78 : 86), 1f);
         if (left) p.rightMargin = dp(5); else p.leftMargin = dp(5);
+        return p;
+    }
+
+    private LinearLayout.LayoutParams tripleCard(int index) {
+        boolean compact = getResources().getConfiguration().screenHeightDp < 700;
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(compact ? 77 : 84), 1f);
+        if (index == 0) p.rightMargin = dp(4);
+        if (index == 1) { p.leftMargin = dp(2); p.rightMargin = dp(2); }
+        if (index == 2) p.leftMargin = dp(4);
         return p;
     }
 
@@ -331,23 +379,23 @@ public class MainActivity extends Activity {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setGravity(Gravity.CENTER);
-        box.setPadding(dp(6), dp(7), dp(6), dp(6));
+        box.setPadding(dp(4), dp(5), dp(4), dp(4));
         box.setOnClickListener(click);
 
         TextView i = new TextView(this);
         i.setText(icon);
-        i.setTextSize(icon.length() > 2 ? 11.5f : 20f);
+        i.setTextSize(icon.length() > 2 ? 10.5f : 16.5f);
         i.setGravity(Gravity.CENTER);
         i.setTextColor(Color.WHITE);
         i.setTypeface(null, Typeface.BOLD);
         i.setBackground(roundRect(tint, 13));
-        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(42), dp(34));
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(40), dp(30));
         ip.gravity = Gravity.CENTER_HORIZONTAL;
         box.addView(i, ip);
 
         TextView t = new TextView(this);
         t.setText(title);
-        t.setTextSize(12.8f);
+        t.setTextSize(11.6f);
         t.setTextColor(TEXT);
         t.setGravity(Gravity.CENTER);
         t.setTypeface(null, Typeface.BOLD);
@@ -357,7 +405,7 @@ public class MainActivity extends Activity {
 
         TextView s = new TextView(this);
         s.setText(sub);
-        s.setTextSize(9.8f);
+        s.setTextSize(8.9f);
         s.setTextColor(MUTED);
         s.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams sp = fullWidth();
@@ -373,8 +421,19 @@ public class MainActivity extends Activity {
         if (qualityMaxCard == null) return;
         applyOptionStyle(qualityMaxCard, !target490Mode);
         applyOptionStyle(quality490Card, target490Mode);
-        applyOptionStyle(outputZipCard, zipMode);
-        applyOptionStyle(outputFolderCard, !zipMode);
+        applyOptionStyle(outputBaleCard, outputMode == OUTPUT_BALE);
+        applyOptionStyle(outputZipCard, outputMode == OUTPUT_ZIP);
+        applyOptionStyle(outputFolderCard, outputMode == OUTPUT_FOLDER);
+
+        if (convertActionButton != null) {
+            if (outputMode == OUTPUT_BALE) {
+                convertActionButton.setText("تبدیل و ارسال مستقیم به بله   ←");
+            } else if (outputMode == OUTPUT_ZIP) {
+                convertActionButton.setText("تبدیل و ساخت ZIP   ←");
+            } else {
+                convertActionButton.setText("تبدیل و ذخیره در پوشه   ←");
+            }
+        }
     }
 
     private void applyOptionStyle(LinearLayout card, boolean selected) {
@@ -456,7 +515,14 @@ public class MainActivity extends Activity {
             toast("ابتدا حداقل یک عکس HEIC/HEIF انتخاب کنید.");
             return;
         }
-        if (zipMode) chooseZipDestination(); else chooseFolder();
+
+        if (outputMode == OUTPUT_BALE) {
+            startBaleConversion();
+        } else if (outputMode == OUTPUT_ZIP) {
+            chooseZipDestination();
+        } else {
+            chooseFolder();
+        }
     }
 
     private void openPicker() {
@@ -535,7 +601,135 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
+    private void startBaleConversion() {
+        lastResultMode = OUTPUT_BALE;
+        lastOutputUri = null;
+        lastOutputName = "اشتراک مستقیم در بله";
+        lastOutputBytes = 0L;
+        lastShareUris.clear();
+        cancelRequested = false;
+        showProgressScreen();
+
+        final List<Uri> inputs = new ArrayList<>(selectedUris);
+        final boolean targetMode = target490Mode;
+
+        executor.execute(() -> {
+            int success = 0;
+            int failed = 0;
+            long bytes = 0L;
+
+            File shareDir = new File(getCacheDir(), "share");
+            deleteRecursively(shareDir);
+            if (!shareDir.exists() && !shareDir.mkdirs()) {
+                runOnUiThread(() -> {
+                    toast("امکان آماده‌سازی پوشه اشتراک وجود ندارد.");
+                    showHome(true);
+                });
+                return;
+            }
+
+            ArrayList<Uri> shareUris = new ArrayList<>();
+
+            for (int i = 0; i < inputs.size(); i++) {
+                if (cancelRequested) {
+                    runOnUiThread(() -> {
+                        toast("تبدیل لغو شد.");
+                        showHome(true);
+                    });
+                    return;
+                }
+
+                final int index = i;
+                setProgressState(index, "در حال تبدیل…", BLUE);
+                try {
+                    EncodedJpeg jpeg = convertOne(inputs.get(i), targetMode);
+                    String safeName = String.format(Locale.US, "%03d_%s", i + 1, jpgName(inputs.get(i)));
+                    File outFile = new File(shareDir, safeName);
+                    try (FileOutputStream out = new FileOutputStream(outFile)) {
+                        out.write(jpeg.bytes);
+                        out.flush();
+                    }
+
+                    Uri contentUri = FileProvider.getUriForFile(
+                            this, getPackageName() + ".fileprovider", outFile);
+                    shareUris.add(contentUri);
+                    bytes += jpeg.bytes.length;
+                    success++;
+                    setProgressState(index, "آماده ارسال ✓", GREEN);
+                } catch (Exception e) {
+                    failed++;
+                    setProgressState(index, "خطا", Color.rgb(225, 72, 93));
+                }
+                updateRing(i + 1, inputs.size());
+            }
+
+            lastShareUris.clear();
+            lastShareUris.addAll(shareUris);
+            lastOutputBytes = bytes;
+
+            final int ok = success;
+            final int bad = failed;
+            runOnUiThread(() -> {
+                showSuccess(ok, bad);
+                if (!lastShareUris.isEmpty()) {
+                    shareToBale(new ArrayList<>(lastShareUris));
+                }
+            });
+        });
+    }
+
+    private void shareToBale(ArrayList<Uri> uris) {
+        if (uris == null || uris.isEmpty()) {
+            toast("فایلی برای اشتراک آماده نیست.");
+            return;
+        }
+
+        Intent intent = new Intent(uris.size() == 1 ? Intent.ACTION_SEND : Intent.ACTION_SEND_MULTIPLE);
+        intent.setType("image/jpeg");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+        if (uris.size() == 1) {
+            intent.putExtra(Intent.EXTRA_STREAM, uris.get(0));
+        } else {
+            intent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
+        }
+
+        ClipData clip = ClipData.newUri(getContentResolver(), "ZipPix", uris.get(0));
+        for (int i = 1; i < uris.size(); i++) {
+            clip.addItem(new ClipData.Item(uris.get(i)));
+        }
+        intent.setClipData(clip);
+
+        try {
+            intent.setPackage("ir.nasim");
+            if (intent.resolveActivity(getPackageManager()) != null) {
+                startActivity(intent);
+                return;
+            }
+        } catch (Exception ignored) {}
+
+        try {
+            intent.setPackage(null);
+            startActivity(Intent.createChooser(intent, "اشتراک‌گذاری تصاویر"));
+            toast("پیام‌رسان بله پیدا نشد؛ فهرست اشتراک باز شد.");
+        } catch (Exception e) {
+            toast("اشتراک‌گذاری ممکن نشد.");
+        }
+    }
+
+    private void deleteRecursively(File file) {
+        if (file == null || !file.exists()) return;
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (File child : children) deleteRecursively(child);
+            }
+        }
+        file.delete();
+    }
+
     private void startZipConversion(Uri outputUri) {
+        lastResultMode = OUTPUT_ZIP;
         lastOutputUri = outputUri;
         lastWasZip = true;
         lastOutputName = displayName(outputUri);
@@ -599,6 +793,7 @@ public class MainActivity extends Activity {
     }
 
     private void startFolderConversion(Uri treeUri) {
+        lastResultMode = OUTPUT_FOLDER;
         lastOutputUri = treeUri;
         lastWasZip = false;
         lastOutputName = "پوشه خروجی ZipPix";
@@ -801,10 +996,18 @@ public class MainActivity extends Activity {
         mp.topMargin = dp(16);
         root.addView(message, mp);
 
+        String resultTail;
+        if (lastResultMode == OUTPUT_BALE) {
+            resultTail = "\nآماده اشتراک مستقیم در بله";
+        } else if (lastResultMode == OUTPUT_ZIP) {
+            resultTail = "\nو در یک فایل ZIP قرار گرفت";
+        } else {
+            resultTail = "\nو در پوشه انتخاب‌شده ذخیره شد";
+        }
         TextView detail = smallText(
                 toPersianDigits(String.valueOf(success)) + " فایل با موفقیت به JPG تبدیل شد"
                         + (failed > 0 ? "\n" + toPersianDigits(String.valueOf(failed)) + " فایل با خطا مواجه شد" : "")
-                        + (lastWasZip ? "\nو در یک فایل ZIP قرار گرفت" : "\nو در پوشه انتخاب‌شده ذخیره شد"));
+                        + resultTail);
         detail.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams dp1 = fullWidth();
         dp1.topMargin = dp(7);
@@ -819,12 +1022,12 @@ public class MainActivity extends Activity {
         root.addView(resultCard, rcp);
 
         TextView fileIcon = new TextView(this);
-        fileIcon.setText(lastWasZip ? "ZIP" : "JPG");
+        fileIcon.setText(lastResultMode == OUTPUT_BALE ? "بله" : (lastWasZip ? "ZIP" : "JPG"));
         fileIcon.setTextColor(Color.WHITE);
         fileIcon.setTextSize(12);
         fileIcon.setGravity(Gravity.CENTER);
         fileIcon.setTypeface(null, Typeface.BOLD);
-        fileIcon.setBackground(roundRect(lastWasZip ? Color.rgb(235, 73, 91) : GREEN, 14));
+        fileIcon.setBackground(roundRect(lastResultMode == OUTPUT_BALE ? Color.rgb(23, 160, 210) : (lastWasZip ? Color.rgb(235, 73, 91) : GREEN), 14));
         resultCard.addView(fileIcon, new LinearLayout.LayoutParams(dp(56), dp(62)));
 
         LinearLayout info = new LinearLayout(this);
@@ -845,7 +1048,13 @@ public class MainActivity extends Activity {
         size.setGravity(Gravity.START);
         info.addView(size, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        if (lastWasZip) {
+        if (lastResultMode == OUTPUT_BALE) {
+            TextView baleShare = primaryAction("ارسال دوباره به بله   ↗");
+            LinearLayout.LayoutParams bp = fullWidth();
+            bp.topMargin = dp(18);
+            root.addView(baleShare, bp);
+            baleShare.setOnClickListener(v -> shareToBale(new ArrayList<>(lastShareUris)));
+        } else if (lastWasZip) {
             TextView viewZip = primaryAction("مشاهده فایل ZIP   ▰");
             LinearLayout.LayoutParams vp = fullWidth();
             vp.topMargin = dp(18);
@@ -908,97 +1117,106 @@ public class MainActivity extends Activity {
     }
 
     private EncodedJpeg compressMax490Kb(Bitmap source) throws IOException {
-        // قانون این حالت: هر JPG حتماً <= 490KB باشد.
-        // برای کیفیت بهتر، Quality را حداقل 84 نگه می‌داریم و فقط در صورت نیاز
-        // رزولوشن را تدریجی کم می‌کنیم؛ این کار از ایجاد آرتیفکت‌های شدید JPEG
-        // که در نسخه قبلی دیده می‌شد جلوگیری می‌کند.
+        final int budget = MAX_OUTPUT_BYTES - 1024; // حاشیه امن برای سقف قطعی 490KB
+        final int preferredQuality = 90;
 
-        EncodedJpeg direct = findBestQualityAtOrBelow(
-                source, 97, MIN_TARGET_QUALITY, MAX_OUTPUT_BYTES);
-        if (direct != null) return direct;
+        byte[] q96 = compress(source, 96);
+        if (q96.length <= budget) return new EncodedJpeg(q96, 96);
 
-        Bitmap working = source;
-        boolean ownsWorking = false;
+        EncodedJpeg fullSize = findBestQualityAtOrBelow(source, 96, 84, budget);
+        if (fullSize != null) return fullSize;
 
+        // به جای افت شدید JPEG، بزرگ‌ترین رزولوشنی را پیدا می‌کنیم که با Q90 جا شود.
+        double lowScale = 0.18d;
+        double highScale = 1.0d;
+        double bestScale = lowScale;
+
+        for (int i = 0; i < 8; i++) {
+            double mid = (lowScale + highScale) / 2d;
+            Bitmap probe = highQualityScale(source, mid);
+            byte[] data;
+            try {
+                data = compress(probe, preferredQuality);
+            } finally {
+                if (probe != source && !probe.isRecycled()) probe.recycle();
+            }
+
+            if (data.length <= budget) {
+                bestScale = mid;
+                lowScale = mid;
+            } else {
+                highScale = mid;
+            }
+        }
+
+        Bitmap working = highQualityScale(source, bestScale);
         try {
-            for (int pass = 0; pass < 14; pass++) {
-                byte[] probe = compress(working, MIN_TARGET_QUALITY);
-                if (probe.length <= MAX_OUTPUT_BYTES) {
-                    EncodedJpeg best = findBestQualityAtOrBelow(
-                            working, 97, MIN_TARGET_QUALITY, MAX_OUTPUT_BYTES);
-                    if (best != null) return best;
-                }
+            // اگر به‌خاطر رفتار غیرخطی JPEG هنوز کمی بزرگ بود، با گام‌های کوچک کم می‌کنیم.
+            int guard = 0;
+            while (compress(working, preferredQuality).length > budget && guard++ < 10) {
+                int currentLong = Math.max(working.getWidth(), working.getHeight());
+                int nextLong = Math.max(320, (int) Math.floor(currentLong * 0.94d));
+                Bitmap next = scaleToLongEdge(working, nextLong);
+                if (next == working) break;
+                if (working != source && !working.isRecycled()) working.recycle();
+                working = next;
+            }
 
-                int width = working.getWidth();
-                int height = working.getHeight();
-                int longEdge = Math.max(width, height);
+            EncodedJpeg best = findBestQualityAtOrBelow(working, 96, 88, budget);
+            if (best != null) return best;
 
-                // نسبت کاهش براساس حجم واقعی عکس محاسبه می‌شود؛ با کمی حاشیه
-                // تا خروجی نهایی بعد از جست‌وجوی Quality زیر 490KB بماند.
-                double ratio = Math.sqrt(
-                        (MAX_OUTPUT_BYTES * 0.94d) / Math.max(1d, probe.length));
-                double scale = Math.max(0.74d, Math.min(0.92d, ratio));
+            best = findBestQualityAtOrBelow(working, 87, 82, budget);
+            if (best != null) return best;
 
-                int targetLongEdge = (int) Math.floor(longEdge * scale);
-                if (targetLongEdge >= longEdge) targetLongEdge = longEdge - 64;
-                if (targetLongEdge < 360) targetLongEdge = 360;
+            // حالت بسیار نادر: رزولوشن را باز کمی کاهش می‌دهیم تا Q82 زیر سقف قرار بگیرد.
+            for (int i = 0; i < 8; i++) {
+                int currentLong = Math.max(working.getWidth(), working.getHeight());
+                int nextLong = Math.max(240, (int) Math.floor(currentLong * 0.90d));
+                Bitmap next = scaleToLongEdge(working, nextLong);
+                if (next == working) break;
+                if (working != source && !working.isRecycled()) working.recycle();
+                working = next;
 
-                Bitmap scaled = scaleToLongEdge(working, targetLongEdge);
-                if (scaled == working) {
-                    targetLongEdge = Math.max(320, longEdge - 96);
-                    scaled = scaleToLongEdge(working, targetLongEdge);
-                }
-
-                if (scaled == working) break;
-
-                if (ownsWorking && working != source && !working.isRecycled()) {
-                    working.recycle();
-                }
-                working = scaled;
-                ownsWorking = true;
-
-                EncodedJpeg candidate = findBestQualityAtOrBelow(
-                        working, 97, MIN_TARGET_QUALITY, MAX_OUTPUT_BYTES);
+                EncodedJpeg candidate = findBestQualityAtOrBelow(working, 92, 82, budget);
                 if (candidate != null) return candidate;
             }
 
-            // مسیر نادر برای تصاویر بسیار پرجزئیات/نویزدار.
-            // ابتدا همان رزولوشن باقی‌مانده را با Quality تا 78 امتحان می‌کنیم.
-            EncodedJpeg fallback = findBestQualityAtOrBelow(
-                    working, MIN_TARGET_QUALITY - 1, LAST_RESORT_QUALITY, MAX_OUTPUT_BYTES);
-            if (fallback != null) return fallback;
-
-            // تضمین سخت سقف 490KB: رزولوشن را تا زمانی که Q78 جا شود کاهش می‌دهیم.
-            while (Math.max(working.getWidth(), working.getHeight()) > 160) {
-                int longEdge = Math.max(working.getWidth(), working.getHeight());
-                int nextLong = Math.max(160, (int) Math.floor(longEdge * 0.82d));
-                Bitmap scaled = scaleToLongEdge(working, nextLong);
-                if (scaled == working) break;
-
-                if (ownsWorking && working != source && !working.isRecycled()) {
-                    working.recycle();
-                }
-                working = scaled;
-                ownsWorking = true;
-
-                byte[] bytes = compress(working, LAST_RESORT_QUALITY);
-                if (bytes.length <= MAX_OUTPUT_BYTES) {
-                    EncodedJpeg best = findBestQualityAtOrBelow(
-                            working, 92, LAST_RESORT_QUALITY, MAX_OUTPUT_BYTES);
-                    return best != null ? best : new EncodedJpeg(bytes, LAST_RESORT_QUALITY);
-                }
-            }
-
-            byte[] finalBytes = compress(working, LAST_RESORT_QUALITY);
+            byte[] finalBytes = compress(working, 82);
             if (finalBytes.length > MAX_OUTPUT_BYTES) {
-                throw new IOException("امکان رساندن این تصویر به سقف ۴۹۰KB وجود نداشت");
+                throw new IOException("این تصویر با کیفیت امن به سقف ۴۹۰KB نرسید");
             }
-            return new EncodedJpeg(finalBytes, LAST_RESORT_QUALITY);
+            return new EncodedJpeg(finalBytes, 82);
         } finally {
-            if (ownsWorking && working != source && working != null && !working.isRecycled()) {
-                working.recycle();
-            }
+            if (working != source && !working.isRecycled()) working.recycle();
         }
+    }
+
+    private Bitmap highQualityScale(Bitmap source, double scale) {
+        if (scale >= 0.999d) return source;
+
+        int targetW = Math.max(1, (int) Math.round(source.getWidth() * scale));
+        int targetH = Math.max(1, (int) Math.round(source.getHeight() * scale));
+
+        Bitmap current = source;
+        boolean ownsCurrent = false;
+
+        while (current.getWidth() / 2 >= targetW * 1.25
+                && current.getHeight() / 2 >= targetH * 1.25) {
+            int nextW = Math.max(targetW, current.getWidth() / 2);
+            int nextH = Math.max(targetH, current.getHeight() / 2);
+            Bitmap next = Bitmap.createScaledBitmap(current, nextW, nextH, true);
+            if (ownsCurrent && current != source && !current.isRecycled()) current.recycle();
+            current = next;
+            ownsCurrent = true;
+        }
+
+        if (current.getWidth() != targetW || current.getHeight() != targetH) {
+            Bitmap next = Bitmap.createScaledBitmap(current, targetW, targetH, true);
+            if (ownsCurrent && current != source && !current.isRecycled()) current.recycle();
+            current = next;
+        }
+
+        return current;
     }
 
     private Bitmap scaleToLongEdge(Bitmap source, int targetLongEdge) {
@@ -1041,6 +1259,20 @@ public class MainActivity extends Activity {
     private Bitmap decodeBitmap(Uri uri) throws IOException {
         Throwable lastError = null;
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try {
+                ImageDecoder.Source source = ImageDecoder.createSource(getContentResolver(), uri);
+                Bitmap bitmap = ImageDecoder.decodeBitmap(source, (decoder, info, src) -> {
+                    decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+                    decoder.setMemorySizePolicy(ImageDecoder.MEMORY_POLICY_LOW_RAM);
+                    decoder.setMutableRequired(false);
+                });
+                if (bitmap != null) return bitmap;
+            } catch (Throwable e) {
+                lastError = e;
+            }
+        }
+
         try (InputStream in = getContentResolver().openInputStream(uri)) {
             if (in != null) {
                 Bitmap bitmap = BitmapFactory.decodeStream(in);
@@ -1048,19 +1280,6 @@ public class MainActivity extends Activity {
             }
         } catch (Throwable e) {
             lastError = e;
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            try {
-                ImageDecoder.Source source = ImageDecoder.createSource(getContentResolver(), uri);
-                Bitmap bitmap = ImageDecoder.decodeBitmap(source, (decoder, info, src) -> {
-                    decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
-                    decoder.setMemorySizePolicy(ImageDecoder.MEMORY_POLICY_LOW_RAM);
-                });
-                if (bitmap != null) return bitmap;
-            } catch (Throwable e) {
-                lastError = e;
-            }
         }
 
         try (InputStream in = getContentResolver().openInputStream(uri)) {

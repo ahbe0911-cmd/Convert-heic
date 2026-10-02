@@ -43,3 +43,15 @@ jobs:
           name: Convert-heic-debug-apk
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+
+      - name: Package source
+        run: |
+          zip -qr ZipPix-source.zip . -x ".git/*" "app/build/*" ".gradle/*"
+
+      - name: Upload source
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZipPix-source
+          path: ZipPix-source.zip
+          if-no-files-found: error

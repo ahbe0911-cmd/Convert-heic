@@ -1,5 +1,7 @@
 package ir.convertheic.app;
 
+import com.bumptech.glide.integration.heif.HeifBitmapFactory;
+
 import android.app.Activity;
 import android.content.ClipData;
 import android.content.ContentResolver;
@@ -435,22 +437,44 @@ public class MainActivity extends Activity {
     }
 
     private Bitmap decodeBitmap(Uri uri) throws IOException {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            ImageDecoder.Source source = ImageDecoder.createSource(getContentResolver(), uri);
-            return ImageDecoder.decodeBitmap(source, (decoder, info, src) -> {
-                decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
-                decoder.setMemorySizePolicy(ImageDecoder.MEMORY_POLICY_LOW_RAM);
-            });
+        Throwable lastError = null;
+
+        // مسیر اول: دیکودر استاندارد اندروید
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in != null) {
+                Bitmap bitmap = BitmapFactory.decodeStream(in);
+                if (bitmap != null) return bitmap;
+            }
+        } catch (Throwable e) {
+            lastError = e;
         }
 
-        try (InputStream in = getContentResolver().openInputStream(uri)) {
-            if (in == null) throw new IOException("فایل ورودی باز نشد");
-            Bitmap bitmap = BitmapFactory.decodeStream(in);
-            if (bitmap == null) {
-                throw new IOException("این دستگاه نتوانست فایل HEIC/HEIF را باز کند");
+        // مسیر دوم: ImageDecoder در اندروید 9 به بالا
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            try {
+                ImageDecoder.Source source = ImageDecoder.createSource(getContentResolver(), uri);
+                Bitmap bitmap = ImageDecoder.decodeBitmap(source, (decoder, info, src) -> {
+                    decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
+                    decoder.setMemorySizePolicy(ImageDecoder.MEMORY_POLICY_LOW_RAM);
+                });
+                if (bitmap != null) return bitmap;
+            } catch (Throwable e) {
+                lastError = e;
             }
-            return bitmap;
         }
+
+        // مسیر سوم و مستقل: libheif؛ برای HEICهایی که دیکودر خود گوشی پشتیبانی نمی‌کند.
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in != null) {
+                Bitmap bitmap = HeifBitmapFactory.decodeStream(in);
+                if (bitmap != null) return bitmap;
+            }
+        } catch (Throwable e) {
+            lastError = e;
+        }
+
+        String detail = lastError == null ? "" : " (" + lastError.getClass().getSimpleName() + ")";
+        throw new IOException("فایل HEIC/HEIF قابل تبدیل نبود" + detail);
     }
 
     private byte[] compress(Bitmap bitmap, int quality) throws IOException {
@@ -458,7 +482,21 @@ public class MainActivity extends Activity {
         if (!bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)) {
             throw new IOException("تبدیل JPEG ناموفق بود");
         }
-        return out.toByteArray();
+
+        byte[] bytes = out.toByteArray();
+        if (!isRealJpeg(bytes)) {
+            throw new IOException("خروجی ساخته‌شده JPEG معتبر نیست");
+        }
+        return bytes;
+    }
+
+    private boolean isRealJpeg(byte[] bytes) {
+        return bytes != null
+                && bytes.length >= 4
+                && (bytes[0] & 0xFF) == 0xFF
+                && (bytes[1] & 0xFF) == 0xD8
+                && (bytes[bytes.length - 2] & 0xFF) == 0xFF
+                && (bytes[bytes.length - 1] & 0xFF) == 0xD9;
     }
 
     private String jpgName(Uri uri) {

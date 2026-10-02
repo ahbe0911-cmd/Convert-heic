@@ -51,7 +51,7 @@ public class MainActivity extends Activity {
     private static final int REQ_PICK_FOLDER = 102;
 
     private static final int TARGET_BYTES = 480 * 1024;
-    private static final int MIN_SAFE_QUALITY = 90;
+    private static final int MIN_TARGET_QUALITY = 70;
 
     private final ArrayList<Uri> selectedUris = new ArrayList<>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -142,10 +142,10 @@ public class MainActivity extends Activity {
         maxQualityRadio.setChecked(true);
         group.addView(maxQualityRadio, matchWrap());
 
-        target480Radio = radio("هدف حدود ۴۸۰KB — رزولوشن اصلی، اولویت با کیفیت");
+        target480Radio = radio("هدف حدود ۴۸۰KB — فشرده‌سازی هوشمند با کیفیت بالا");
         group.addView(target480Radio, matchWrap());
 
-        TextView note = normalText("در حالت ۴۸۰KB ابعاد عکس کم نمی‌شود. اگر رسیدن به ۴۸۰KB نیازمند افت زیاد کیفیت باشد، برنامه کیفیت را حفظ می‌کند و فایل می‌تواند کمی بزرگ‌تر بماند.");
+        TextView note = normalText("در حالت ۴۸۰KB برنامه ابتدا کیفیت JPEG را بهینه می‌کند و فقط اگر لازم باشد ابعاد را به‌صورت ملایم کاهش می‌دهد تا هر عکس نزدیک ۴۸۰KB بماند.");
         note.setTextSize(12.5f);
         note.setLineSpacing(0, 1.25f);
         note.setPadding(0, dp(8), 0, 0);
@@ -336,7 +336,7 @@ public class MainActivity extends Activity {
 
             String message = "ZIP آماده شد • موفق: " + success + " • ناموفق: " + failed;
             if (qualityProtected > 0) {
-                message += " • " + qualityProtected + " فایل برای حفظ کیفیت بالاتر از ۴۸۰KB ماند";
+                message += " • " + qualityProtected + " فایل کمی بالاتر از ۴۸۰KB شد";
             }
             finishBusy(message, false);
         });
@@ -402,38 +402,122 @@ public class MainActivity extends Activity {
                 return new EncodedJpeg(compress(bitmap, 100), 100);
             }
 
-            byte[] q100 = compress(bitmap, 100);
-            if (q100.length <= TARGET_BYTES) {
-                return new EncodedJpeg(q100, 100);
-            }
-
-            byte[] safe = compress(bitmap, MIN_SAFE_QUALITY);
-            if (safe.length > TARGET_BYTES) {
-                return new EncodedJpeg(safe, MIN_SAFE_QUALITY);
-            }
-
-            int low = MIN_SAFE_QUALITY;
-            int high = 99;
-            int bestQuality = MIN_SAFE_QUALITY;
-            byte[] best = safe;
-
-            while (low <= high) {
-                int mid = (low + high) >>> 1;
-                byte[] candidate = compress(bitmap, mid);
-
-                if (candidate.length <= TARGET_BYTES) {
-                    best = candidate;
-                    bestQuality = mid;
-                    low = mid + 1;
-                } else {
-                    high = mid - 1;
-                }
-            }
-
-            return new EncodedJpeg(best, bestQuality);
+            return compressNear480Kb(bitmap);
         } finally {
             bitmap.recycle();
         }
+    }
+
+    private EncodedJpeg compressNear480Kb(Bitmap source) throws IOException {
+        Bitmap working = source;
+        boolean ownsWorking = false;
+
+        try {
+            // اول تلاش می‌کنیم بدون تغییر ابعاد، بهترین کیفیتی را پیدا کنیم.
+            EncodedJpeg direct = findBestQualityAtOrBelow(working, 98, MIN_TARGET_QUALITY, TARGET_BYTES);
+            if (direct != null) {
+                return direct;
+            }
+
+            // اگر حتی Quality 70 هم بزرگ بود، ابعاد را به‌صورت تدریجی و هوشمند کم می‌کنیم.
+            for (int pass = 0; pass < 8; pass++) {
+                byte[] probe = compress(working, 82);
+                double ratio = Math.sqrt((TARGET_BYTES * 0.92d) / Math.max(1d, probe.length));
+                double scale = Math.max(0.68d, Math.min(0.92d, ratio));
+
+                int newWidth = Math.max(900, (int) Math.round(working.getWidth() * scale));
+                int newHeight = Math.max(900, (int) Math.round(working.getHeight() * scale));
+
+                // نسبت تصویر را حفظ کن و اجازه نده یکی از اضلاع بی‌دلیل کشیده شود.
+                if (working.getWidth() >= working.getHeight()) {
+                    newHeight = Math.max(1, (int) Math.round((double) working.getHeight() * newWidth / working.getWidth()));
+                } else {
+                    newWidth = Math.max(1, (int) Math.round((double) working.getWidth() * newHeight / working.getHeight()));
+                }
+
+                if (newWidth >= working.getWidth() || newHeight >= working.getHeight()) {
+                    break;
+                }
+
+                Bitmap scaled = Bitmap.createScaledBitmap(working, newWidth, newHeight, true);
+                if (ownsWorking && working != source && !working.isRecycled()) {
+                    working.recycle();
+                }
+                working = scaled;
+                ownsWorking = true;
+
+                EncodedJpeg candidate = findBestQualityAtOrBelow(
+                        working, 96, MIN_TARGET_QUALITY, TARGET_BYTES);
+                if (candidate != null) {
+                    return candidate;
+                }
+
+                if (working.getWidth() <= 900 || working.getHeight() <= 900) {
+                    break;
+                }
+            }
+
+            // حالت نادر: برای تضمین نزدیک‌شدن به ۴۸۰KB، کیفیت را کمی پایین‌تر جستجو کن.
+            EncodedJpeg fallback = findBestQualityAtOrBelow(working, MIN_TARGET_QUALITY - 1, 45, TARGET_BYTES);
+            if (fallback != null) {
+                return fallback;
+            }
+
+            // آخرین راه: کوچک‌سازی نهایی با Quality 70.
+            Bitmap last = working;
+            for (int i = 0; i < 4; i++) {
+                int newWidth = Math.max(640, (int) Math.round(last.getWidth() * 0.82d));
+                int newHeight = Math.max(640, (int) Math.round(last.getHeight() * 0.82d));
+                if (last.getWidth() >= last.getHeight()) {
+                    newHeight = Math.max(1, (int) Math.round((double) last.getHeight() * newWidth / last.getWidth()));
+                } else {
+                    newWidth = Math.max(1, (int) Math.round((double) last.getWidth() * newHeight / last.getHeight()));
+                }
+
+                Bitmap scaled = Bitmap.createScaledBitmap(last, newWidth, newHeight, true);
+                if (last != source && !last.isRecycled()) last.recycle();
+                last = scaled;
+                working = scaled;
+                ownsWorking = true;
+
+                EncodedJpeg candidate = findBestQualityAtOrBelow(last, 90, 45, TARGET_BYTES);
+                if (candidate != null) return candidate;
+            }
+
+            // اگر یک تصویر بسیار پیچیده باشد، کم‌حجم‌ترین خروجی امن را برگردان.
+            return new EncodedJpeg(compress(working, 45), 45);
+        } finally {
+            if (ownsWorking && working != source && !working.isRecycled()) {
+                working.recycle();
+            }
+        }
+    }
+
+    private EncodedJpeg findBestQualityAtOrBelow(
+            Bitmap bitmap, int highQuality, int lowQuality, int maxBytes) throws IOException {
+
+        byte[] lowBytes = compress(bitmap, lowQuality);
+        if (lowBytes.length > maxBytes) return null;
+
+        int low = lowQuality;
+        int high = highQuality;
+        int bestQuality = lowQuality;
+        byte[] best = lowBytes;
+
+        while (low <= high) {
+            int mid = (low + high) >>> 1;
+            byte[] candidate = compress(bitmap, mid);
+
+            if (candidate.length <= maxBytes) {
+                best = candidate;
+                bestQuality = mid;
+                low = mid + 1;
+            } else {
+                high = mid - 1;
+            }
+        }
+
+        return new EncodedJpeg(best, bestQuality);
     }
 
     private Bitmap decodeBitmap(Uri uri) throws IOException {

@@ -10,22 +10,26 @@ import android.content.res.ColorStateList;
 import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ImageDecoder;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
+import android.util.Size;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.Button;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
-import android.widget.RadioButton;
-import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -53,144 +57,343 @@ public class MainActivity extends Activity {
     private static final int TARGET_BYTES = 480 * 1024;
     private static final int MIN_TARGET_QUALITY = 70;
 
+    private static final int BG = Color.rgb(247, 248, 253);
+    private static final int TEXT = Color.rgb(20, 28, 54);
+    private static final int MUTED = Color.rgb(119, 126, 150);
+    private static final int BLUE = Color.rgb(39, 118, 255);
+    private static final int PURPLE = Color.rgb(112, 42, 245);
+    private static final int GREEN = Color.rgb(26, 188, 128);
+    private static final int SOFT = Color.rgb(244, 246, 252);
+
     private final ArrayList<Uri> selectedUris = new ArrayList<>();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService thumbnailExecutor = Executors.newFixedThreadPool(2);
+    private final ArrayList<TextView> progressStatuses = new ArrayList<>();
 
-    private TextView selectedText;
-    private TextView statusText;
-    private ProgressBar progressBar;
-    private Button pickButton;
-    private Button zipButton;
-    private Button folderButton;
-    private RadioButton maxQualityRadio;
-    private RadioButton target480Radio;
+    private boolean target480Mode = false;
+    private boolean zipMode = true;
+    private volatile boolean cancelRequested = false;
+    private int screenMode = 0; // 0 home, 1 progress, 2 success
+
+    private LinearLayout selectedThumbs;
+    private TextView selectedSummary;
+    private LinearLayout qualityMaxCard;
+    private LinearLayout quality480Card;
+    private LinearLayout outputZipCard;
+    private LinearLayout outputFolderCard;
+
+    private RingProgress ringProgress;
+
+    private Uri lastOutputUri;
+    private boolean lastWasZip;
+    private String lastOutputName = "";
+    private long lastOutputBytes = 0L;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        getWindow().setStatusBarColor(Color.rgb(246, 247, 251));
+        getWindow().setStatusBarColor(BG);
+        getWindow().setNavigationBarColor(BG);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
         }
-        setContentView(buildUi());
+        showHome(false);
     }
 
-    private View buildUi() {
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
-        scroll.setBackgroundColor(Color.rgb(246, 247, 251));
-        scroll.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+    private void showHome(boolean animate) {
+        screenMode = 0;
+        cancelRequested = false;
+        View view = buildHome();
+        showScreen(view, animate);
+        refreshSelection();
+        refreshOptionCards();
+    }
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(20), dp(26), dp(20), dp(26));
-        root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        scroll.addView(root, new ScrollView.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT));
+    private View buildHome() {
+        ScrollView scroll = baseScroll();
+        LinearLayout root = baseRoot();
+        scroll.addView(root);
 
-        TextView title = new TextView(this);
-        title.setText("HEIC  →  JPG");
-        title.setTextSize(30);
-        title.setTextColor(Color.rgb(17, 24, 39));
-        title.setGravity(Gravity.CENTER);
-        title.setTypeface(null, android.graphics.Typeface.BOLD);
-        root.addView(title, matchWrap());
+        root.addView(buildBrandHeader(), fullWidth());
 
-        TextView subtitle = new TextView(this);
-        subtitle.setText("تبدیل سریع و آفلاین • چند عکس با هم • خروجی ZIP");
-        subtitle.setTextSize(14);
-        subtitle.setTextColor(Color.rgb(107, 114, 128));
-        subtitle.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams subtitleParams = matchWrap();
-        subtitleParams.topMargin = dp(8);
-        subtitleParams.bottomMargin = dp(20);
-        root.addView(subtitle, subtitleParams);
+        LinearLayout pickCard = whiteCard();
+        LinearLayout.LayoutParams pickCardParams = fullWidth();
+        pickCardParams.topMargin = dp(14);
+        root.addView(pickCard, pickCardParams);
 
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(18), dp(18), dp(18), dp(18));
-        card.setBackground(roundRect(Color.WHITE, 22));
-        card.setElevation(dp(2));
-        root.addView(card, matchWrap());
+        TextView selectBox = new TextView(this);
+        selectBox.setText("▣  ＋\nانتخاب فایل‌های HEIC / HEIF\nچندین عکس را همزمان انتخاب کنید");
+        selectBox.setTextColor(TEXT);
+        selectBox.setTextSize(15);
+        selectBox.setGravity(Gravity.CENTER);
+        selectBox.setTypeface(null, Typeface.BOLD);
+        selectBox.setPadding(dp(14), dp(24), dp(14), dp(24));
+        GradientDrawable dashed = new GradientDrawable();
+        dashed.setColor(Color.rgb(251, 251, 255));
+        dashed.setCornerRadius(dp(20));
+        dashed.setStroke(dp(2), Color.rgb(170, 178, 255), dp(7), dp(5));
+        selectBox.setBackground(dashed);
+        selectBox.setOnClickListener(v -> openPicker());
+        pickCard.addView(selectBox, fullWidth());
 
-        card.addView(label("۱) انتخاب عکس‌های HEIC / HEIF"), matchWrap());
+        LinearLayout selectedRow = new LinearLayout(this);
+        selectedRow.setOrientation(LinearLayout.HORIZONTAL);
+        selectedRow.setGravity(Gravity.CENTER_VERTICAL);
+        selectedRow.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        selectedRow.setPadding(dp(10), dp(12), dp(10), 0);
+        pickCard.addView(selectedRow, fullWidth());
 
-        pickButton = primaryButton("انتخاب عکس‌ها");
-        LinearLayout.LayoutParams pickParams = matchWrap();
-        pickParams.topMargin = dp(12);
-        card.addView(pickButton, pickParams);
-        pickButton.setOnClickListener(v -> openPicker());
+        selectedThumbs = new LinearLayout(this);
+        selectedThumbs.setOrientation(LinearLayout.HORIZONTAL);
+        selectedThumbs.setGravity(Gravity.CENTER_VERTICAL);
+        selectedRow.addView(selectedThumbs, new LinearLayout.LayoutParams(0, dp(60), 1f));
 
-        selectedText = normalText("هنوز عکسی انتخاب نشده است.");
-        selectedText.setPadding(0, dp(12), 0, 0);
-        card.addView(selectedText, matchWrap());
+        selectedSummary = new TextView(this);
+        selectedSummary.setTextColor(TEXT);
+        selectedSummary.setTextSize(14);
+        selectedSummary.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        selectedSummary.setTypeface(null, Typeface.BOLD);
+        selectedSummary.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        selectedRow.addView(selectedSummary, new LinearLayout.LayoutParams(dp(145), dp(60)));
 
-        TextView modeLabel = label("۲) کیفیت خروجی");
-        LinearLayout.LayoutParams modeLabelParams = matchWrap();
-        modeLabelParams.topMargin = dp(20);
-        card.addView(modeLabel, modeLabelParams);
+        addSectionTitle(root, "کیفیت خروجی");
+        LinearLayout qualityRow = optionRow();
+        root.addView(qualityRow, fullWidth());
+        quality480Card = optionCard("◉", "حجم حدود ۴۸۰KB", "مناسب برای اشتراک‌گذاری", false,
+                v -> { target480Mode = true; refreshOptionCards(); });
+        qualityMaxCard = optionCard("◆", "کیفیت حداکثری", "بهترین کیفیت تصویر", true,
+                v -> { target480Mode = false; refreshOptionCards(); });
+        qualityRow.addView(quality480Card, weightedCard(true));
+        qualityRow.addView(qualityMaxCard, weightedCard(false));
 
-        RadioGroup group = new RadioGroup(this);
-        group.setOrientation(RadioGroup.VERTICAL);
-        group.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
-        LinearLayout.LayoutParams groupParams = matchWrap();
-        groupParams.topMargin = dp(6);
-        card.addView(group, groupParams);
+        addSectionTitle(root, "نوع خروجی");
+        LinearLayout outputRow = optionRow();
+        root.addView(outputRow, fullWidth());
+        outputZipCard = optionCard("ZIP", "خروجی ZIP", "همه تصاویر در یک فایل", true,
+                v -> { zipMode = true; refreshOptionCards(); });
+        outputFolderCard = optionCard("▰", "ذخیره در پوشه", "ذخیره جداگانه JPGها", false,
+                v -> { zipMode = false; refreshOptionCards(); });
+        outputRow.addView(outputZipCard, weightedCard(true));
+        outputRow.addView(outputFolderCard, weightedCard(false));
 
-        maxQualityRadio = radio("کیفیت حداکثری — رزولوشن اصلی، JPEG 100");
-        maxQualityRadio.setChecked(true);
-        group.addView(maxQualityRadio, matchWrap());
+        TextView convert = primaryAction("↻   تبدیل و ساخت خروجی   ›");
+        LinearLayout.LayoutParams convertParams = fullWidth();
+        convertParams.topMargin = dp(18);
+        root.addView(convert, convertParams);
+        convert.setOnClickListener(v -> startConversionFlow());
 
-        target480Radio = radio("هدف حدود ۴۸۰KB — فشرده‌سازی هوشمند با کیفیت بالا");
-        group.addView(target480Radio, matchWrap());
-
-        TextView note = normalText("در حالت ۴۸۰KB برنامه ابتدا کیفیت JPEG را بهینه می‌کند و فقط اگر لازم باشد ابعاد را به‌صورت ملایم کاهش می‌دهد تا هر عکس نزدیک ۴۸۰KB بماند.");
-        note.setTextSize(12.5f);
-        note.setLineSpacing(0, 1.25f);
-        note.setPadding(0, dp(8), 0, 0);
-        card.addView(note, matchWrap());
-
-        TextView outputLabel = label("۳) نوع خروجی");
-        LinearLayout.LayoutParams outputLabelParams = matchWrap();
-        outputLabelParams.topMargin = dp(20);
-        card.addView(outputLabel, outputLabelParams);
-
-        zipButton = primaryButton("ساخت یک فایل ZIP از همه عکس‌ها");
-        LinearLayout.LayoutParams zipParams = matchWrap();
-        zipParams.topMargin = dp(12);
-        card.addView(zipButton, zipParams);
-        zipButton.setOnClickListener(v -> chooseZipDestination());
-
-        folderButton = secondaryButton("ذخیره JPGها در یک پوشه");
-        LinearLayout.LayoutParams folderParams = matchWrap();
-        folderParams.topMargin = dp(10);
-        card.addView(folderButton, folderParams);
-        folderButton.setOnClickListener(v -> chooseFolder());
-
-        progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
-        progressBar.setMax(100);
-        progressBar.setProgress(0);
-        progressBar.setVisibility(View.GONE);
-        progressBar.setProgressTintList(ColorStateList.valueOf(Color.rgb(79, 70, 229)));
-        LinearLayout.LayoutParams progressParams = matchWrap();
-        progressParams.topMargin = dp(18);
-        card.addView(progressBar, progressParams);
-
-        statusText = normalText("آماده");
-        statusText.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams statusParams = matchWrap();
-        statusParams.topMargin = dp(8);
-        card.addView(statusText, statusParams);
-
-        TextView privacy = normalText("🔒 تمام پردازش روی گوشی انجام می‌شود و عکس‌ها به اینترنت ارسال نمی‌شوند.");
-        privacy.setTextSize(12.5f);
+        TextView privacy = smallText("🔒  پردازش کاملاً آفلاین\nفایل‌های شما فقط روی دستگاه خودتان پردازش می‌شوند");
         privacy.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams privacyParams = matchWrap();
-        privacyParams.topMargin = dp(16);
+        LinearLayout.LayoutParams privacyParams = fullWidth();
+        privacyParams.topMargin = dp(13);
+        privacyParams.bottomMargin = dp(14);
         root.addView(privacy, privacyParams);
 
         return scroll;
+    }
+
+    private View buildBrandHeader() {
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setPadding(dp(18), dp(20), dp(18), dp(20));
+        header.setBackground(gradient(BLUE, PURPLE, 26));
+        header.setElevation(dp(7));
+        header.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+
+        LinearLayout textBox = new LinearLayout(this);
+        textBox.setOrientation(LinearLayout.VERTICAL);
+        textBox.setGravity(Gravity.END);
+        header.addView(textBox, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        TextView brand = new TextView(this);
+        brand.setText("ZipPix");
+        brand.setTextColor(Color.WHITE);
+        brand.setTextSize(30);
+        brand.setGravity(Gravity.END);
+        brand.setTypeface(null, Typeface.BOLD);
+        textBox.addView(brand, fullWidth());
+
+        TextView title = new TextView(this);
+        title.setText("مبدل HEIC به JPG");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(16);
+        title.setGravity(Gravity.END);
+        title.setTypeface(null, Typeface.BOLD);
+        textBox.addView(title, fullWidth());
+
+        TextView sub = new TextView(this);
+        sub.setText("تبدیل سریع، گروهی و آفلاین تصاویر");
+        sub.setTextColor(Color.argb(215, 255, 255, 255));
+        sub.setTextSize(12.5f);
+        sub.setGravity(Gravity.END);
+        LinearLayout.LayoutParams sp = fullWidth();
+        sp.topMargin = dp(4);
+        textBox.addView(sub, sp);
+
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.drawable.zippix_icon);
+        icon.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        icon.setBackground(roundRect(Color.WHITE, 19));
+        icon.setClipToOutline(true);
+        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(78), dp(78));
+        ip.leftMargin = dp(14);
+        header.addView(icon, ip);
+
+        return header;
+    }
+
+    private void addSectionTitle(LinearLayout root, String title) {
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextColor(TEXT);
+        t.setTextSize(17);
+        t.setTypeface(null, Typeface.BOLD);
+        t.setGravity(Gravity.END);
+        LinearLayout.LayoutParams p = fullWidth();
+        p.topMargin = dp(18);
+        p.bottomMargin = dp(9);
+        root.addView(t, p);
+    }
+
+    private LinearLayout optionRow() {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        return row;
+    }
+
+    private LinearLayout.LayoutParams weightedCard(boolean left) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(132), 1f);
+        if (left) p.rightMargin = dp(6); else p.leftMargin = dp(6);
+        return p;
+    }
+
+    private LinearLayout optionCard(String icon, String title, String sub, boolean selected, View.OnClickListener click) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER);
+        box.setPadding(dp(8), dp(12), dp(8), dp(10));
+        box.setOnClickListener(click);
+
+        TextView i = new TextView(this);
+        i.setText(icon);
+        i.setTextSize(icon.equals("ZIP") ? 13 : 26);
+        i.setGravity(Gravity.CENTER);
+        i.setTextColor(selected ? PURPLE : MUTED);
+        i.setTypeface(null, Typeface.BOLD);
+        box.addView(i, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)));
+
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextSize(14);
+        t.setTextColor(TEXT);
+        t.setGravity(Gravity.CENTER);
+        t.setTypeface(null, Typeface.BOLD);
+        box.addView(t, fullWidth());
+
+        TextView s = new TextView(this);
+        s.setText(sub);
+        s.setTextSize(11.5f);
+        s.setTextColor(MUTED);
+        s.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams sp = fullWidth();
+        sp.topMargin = dp(4);
+        box.addView(s, sp);
+
+        box.setTag(new TextView[]{i, t, s});
+        applyOptionStyle(box, selected);
+        return box;
+    }
+
+    private void refreshOptionCards() {
+        if (qualityMaxCard == null) return;
+        applyOptionStyle(qualityMaxCard, !target480Mode);
+        applyOptionStyle(quality480Card, target480Mode);
+        applyOptionStyle(outputZipCard, zipMode);
+        applyOptionStyle(outputFolderCard, !zipMode);
+    }
+
+    private void applyOptionStyle(LinearLayout card, boolean selected) {
+        card.setBackground(optionBackground(selected));
+        card.setElevation(selected ? dp(5) : dp(1));
+        Object tag = card.getTag();
+        if (tag instanceof TextView[]) {
+            TextView[] views = (TextView[]) tag;
+            views[0].setTextColor(selected ? PURPLE : MUTED);
+        }
+    }
+
+    private void refreshSelection() {
+        if (selectedSummary == null || selectedThumbs == null) return;
+        selectedThumbs.removeAllViews();
+
+        if (selectedUris.isEmpty()) {
+            selectedSummary.setText("هنوز فایلی انتخاب نشده");
+            TextView empty = new TextView(this);
+            empty.setText("＋");
+            empty.setTextSize(24);
+            empty.setTextColor(Color.rgb(170, 175, 194));
+            empty.setGravity(Gravity.CENTER);
+            empty.setBackground(roundRect(Color.rgb(239, 242, 251), 14));
+            selectedThumbs.addView(empty, new LinearLayout.LayoutParams(dp(52), dp(52)));
+            return;
+        }
+
+        long total = 0;
+        for (Uri uri : selectedUris) total += querySize(uri);
+        selectedSummary.setText(toPersianDigits(String.valueOf(selectedUris.size())) + " فایل انتخاب شده\n" + formatBytes(total));
+
+        int previewCount = Math.min(4, selectedUris.size());
+        for (int i = 0; i < previewCount; i++) {
+            Uri uri = selectedUris.get(i);
+            ImageView iv = new ImageView(this);
+            iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            iv.setBackground(roundRect(Color.rgb(231, 235, 248), 13));
+            iv.setClipToOutline(true);
+            LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(52), dp(52));
+            p.rightMargin = dp(5);
+            selectedThumbs.addView(iv, p);
+            thumbnailExecutor.execute(() -> {
+                Bitmap b = loadThumb(uri);
+                if (b != null) runOnUiThread(() -> iv.setImageBitmap(b));
+            });
+        }
+
+        if (selectedUris.size() > 4) {
+            TextView more = new TextView(this);
+            more.setText("+" + toPersianDigits(String.valueOf(selectedUris.size() - 4)));
+            more.setTextColor(PURPLE);
+            more.setTextSize(13);
+            more.setGravity(Gravity.CENTER);
+            more.setTypeface(null, Typeface.BOLD);
+            more.setBackground(roundRect(Color.rgb(239, 235, 255), 13));
+            selectedThumbs.addView(more, new LinearLayout.LayoutParams(dp(52), dp(52)));
+        }
+    }
+
+    private Bitmap loadThumb(Uri uri) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                return getContentResolver().loadThumbnail(uri, new Size(160, 160), null);
+            }
+            try (InputStream in = getContentResolver().openInputStream(uri)) {
+                if (in == null) return null;
+                BitmapFactory.Options opts = new BitmapFactory.Options();
+                opts.inSampleSize = 8;
+                return BitmapFactory.decodeStream(in, null, opts);
+            }
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private void startConversionFlow() {
+        if (selectedUris.isEmpty()) {
+            toast("ابتدا حداقل یک عکس HEIC/HEIF انتخاب کنید.");
+            return;
+        }
+        if (zipMode) chooseZipDestination(); else chooseFolder();
     }
 
     private void openPicker() {
@@ -205,32 +408,20 @@ public class MainActivity extends Activity {
     }
 
     private void chooseZipDestination() {
-        if (!hasSelection()) return;
-
         Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("application/zip");
-        intent.putExtra(Intent.EXTRA_TITLE, "HEIC_to_JPG_" + timestamp() + ".zip");
+        intent.putExtra(Intent.EXTRA_TITLE, "ZipPix_" + timestamp() + ".zip");
         startActivityForResult(intent, REQ_SAVE_ZIP);
     }
 
     private void chooseFolder() {
-        if (!hasSelection()) return;
-
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
                 | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
                 | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
         startActivityForResult(intent, REQ_PICK_FOLDER);
-    }
-
-    private boolean hasSelection() {
-        if (selectedUris.isEmpty()) {
-            Toast.makeText(this, "ابتدا حداقل یک عکس انتخاب کنید.", Toast.LENGTH_SHORT).show();
-            return false;
-        }
-        return true;
     }
 
     @Override
@@ -240,12 +431,13 @@ public class MainActivity extends Activity {
 
         if (requestCode == REQ_PICK_IMAGES) {
             receiveSelection(data);
+            refreshSelection();
             return;
         }
 
         if (requestCode == REQ_SAVE_ZIP) {
             Uri destination = data.getData();
-            if (destination != null) convertToZip(destination);
+            if (destination != null) startZipConversion(destination);
             return;
         }
 
@@ -256,155 +448,399 @@ public class MainActivity extends Activity {
                     getContentResolver().takePersistableUriPermission(
                             treeUri,
                             Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-                } catch (Exception ignored) {
-                }
-                convertToFolder(treeUri);
+                } catch (Exception ignored) {}
+                startFolderConversion(treeUri);
             }
         }
     }
 
     private void receiveSelection(Intent data) {
         selectedUris.clear();
-
-        if (data.getData() != null) {
-            addUri(data.getData(), data.getFlags());
-        }
-
+        if (data.getData() != null) addUri(data.getData(), data.getFlags());
         ClipData clip = data.getClipData();
         if (clip != null) {
-            for (int i = 0; i < clip.getItemCount(); i++) {
-                addUri(clip.getItemAt(i).getUri(), data.getFlags());
-            }
-        }
-
-        if (selectedUris.isEmpty()) {
-            selectedText.setText("عکسی انتخاب نشد.");
-        } else {
-            selectedText.setText("تعداد عکس انتخاب‌شده: " + selectedUris.size());
+            for (int i = 0; i < clip.getItemCount(); i++) addUri(clip.getItemAt(i).getUri(), data.getFlags());
         }
     }
 
     private void addUri(Uri uri, int flags) {
         if (uri == null || selectedUris.contains(uri)) return;
         selectedUris.add(uri);
-
         try {
             int takeFlags = flags & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
             getContentResolver().takePersistableUriPermission(uri, takeFlags);
-        } catch (Exception ignored) {
-        }
+        } catch (Exception ignored) {}
     }
 
-    private void convertToZip(Uri outputUri) {
+    private void startZipConversion(Uri outputUri) {
+        lastOutputUri = outputUri;
+        lastWasZip = true;
+        lastOutputName = displayName(outputUri);
+        if (lastOutputName == null || !lastOutputName.toLowerCase(Locale.US).endsWith(".zip")) {
+            lastOutputName = "ZipPix_" + timestamp() + ".zip";
+        }
+        cancelRequested = false;
+        showProgressScreen();
+
         final List<Uri> inputs = new ArrayList<>(selectedUris);
-        final boolean targetMode = target480Radio.isChecked();
-        setBusy(true, "در حال تبدیل و ساخت ZIP…");
+        final boolean targetMode = target480Mode;
 
         executor.execute(() -> {
             int success = 0;
             int failed = 0;
-            int qualityProtected = 0;
+            boolean canceled = false;
 
             try (OutputStream raw = getContentResolver().openOutputStream(outputUri, "w")) {
-                if (raw == null) throw new IOException("فایل خروجی باز نشد");
+                if (raw == null) throw new IOException("فایل ZIP باز نشد");
 
                 try (ZipOutputStream zip = new ZipOutputStream(raw)) {
                     for (int i = 0; i < inputs.size(); i++) {
-                        updateProgress(i, inputs.size(), "در حال تبدیل " + (i + 1) + " از " + inputs.size());
-                        Uri input = inputs.get(i);
-
+                        if (cancelRequested) { canceled = true; break; }
+                        setProgressState(i, "در حال تبدیل…", BLUE);
                         try {
-                            EncodedJpeg jpeg = convertOne(input, targetMode);
-                            String name = String.format(Locale.US, "%03d_%s", i + 1, jpgName(input));
-
-                            ZipEntry entry = new ZipEntry(name);
+                            EncodedJpeg jpeg = convertOne(inputs.get(i), targetMode);
+                            ZipEntry entry = new ZipEntry(String.format(Locale.US, "%03d_%s", i + 1, jpgName(inputs.get(i))));
                             zip.putNextEntry(entry);
                             zip.write(jpeg.bytes);
                             zip.closeEntry();
-
                             success++;
-                            if (targetMode && jpeg.bytes.length > TARGET_BYTES) qualityProtected++;
-                        } catch (Exception ignored) {
+                            setProgressState(i, "تبدیل شد ✓", GREEN);
+                        } catch (Exception e) {
                             failed++;
+                            setProgressState(i, "خطا", Color.rgb(225, 72, 93));
                         }
+                        updateRing(i + 1, inputs.size());
                     }
                 }
             } catch (Exception e) {
-                finishBusy("خطا در ساخت ZIP: " + safeMessage(e), true);
+                runOnUiThread(() -> {
+                    toast("خطا در ساخت ZIP: " + safeMessage(e));
+                    showHome(true);
+                });
                 return;
             }
 
-            String message = "ZIP آماده شد • موفق: " + success + " • ناموفق: " + failed;
-            if (qualityProtected > 0) {
-                message += " • " + qualityProtected + " فایل کمی بالاتر از ۴۸۰KB شد";
+            if (canceled) {
+                runOnUiThread(() -> {
+                    toast("تبدیل لغو شد.");
+                    showHome(true);
+                });
+                return;
             }
-            finishBusy(message, false);
+
+            lastOutputBytes = querySize(outputUri);
+            final int ok = success;
+            final int bad = failed;
+            runOnUiThread(() -> showSuccess(ok, bad));
         });
     }
 
-    private void convertToFolder(Uri treeUri) {
+    private void startFolderConversion(Uri treeUri) {
+        lastOutputUri = treeUri;
+        lastWasZip = false;
+        lastOutputName = "پوشه خروجی ZipPix";
+        lastOutputBytes = 0;
+        cancelRequested = false;
+        showProgressScreen();
+
         final List<Uri> inputs = new ArrayList<>(selectedUris);
-        final boolean targetMode = target480Radio.isChecked();
-        setBusy(true, "در حال تبدیل و ذخیره JPGها…");
+        final boolean targetMode = target480Mode;
 
         executor.execute(() -> {
             int success = 0;
             int failed = 0;
-            int qualityProtected = 0;
-
+            long bytes = 0;
+            boolean canceled = false;
             ContentResolver resolver = getContentResolver();
             Uri parent;
+
             try {
                 String treeId = DocumentsContract.getTreeDocumentId(treeUri);
                 parent = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeId);
             } catch (Exception e) {
-                finishBusy("پوشه انتخاب‌شده قابل استفاده نیست.", true);
+                runOnUiThread(() -> {
+                    toast("پوشه انتخاب‌شده قابل استفاده نیست.");
+                    showHome(true);
+                });
                 return;
             }
 
             for (int i = 0; i < inputs.size(); i++) {
-                updateProgress(i, inputs.size(), "در حال ذخیره " + (i + 1) + " از " + inputs.size());
-
+                if (cancelRequested) { canceled = true; break; }
+                setProgressState(i, "در حال تبدیل…", BLUE);
                 try {
-                    Uri input = inputs.get(i);
-                    EncodedJpeg jpeg = convertOne(input, targetMode);
-                    String name = String.format(Locale.US, "%03d_%s", i + 1, jpgName(input));
-
+                    EncodedJpeg jpeg = convertOne(inputs.get(i), targetMode);
+                    String name = String.format(Locale.US, "%03d_%s", i + 1, jpgName(inputs.get(i)));
                     Uri output = DocumentsContract.createDocument(resolver, parent, "image/jpeg", name);
                     if (output == null) throw new IOException("فایل JPG ساخته نشد");
-
                     try (OutputStream out = resolver.openOutputStream(output, "w")) {
-                        if (out == null) throw new IOException("فایل JPG باز نشد");
+                        if (out == null) throw new IOException("خروجی باز نشد");
                         out.write(jpeg.bytes);
                         out.flush();
                     }
-
+                    bytes += jpeg.bytes.length;
                     success++;
-                    if (targetMode && jpeg.bytes.length > TARGET_BYTES) qualityProtected++;
-                } catch (Exception ignored) {
+                    setProgressState(i, "تبدیل شد ✓", GREEN);
+                } catch (Exception e) {
                     failed++;
+                    setProgressState(i, "خطا", Color.rgb(225, 72, 93));
                 }
+                updateRing(i + 1, inputs.size());
             }
 
-            String message = "ذخیره انجام شد • موفق: " + success + " • ناموفق: " + failed;
-            if (qualityProtected > 0) {
-                message += " • " + qualityProtected + " فایل برای حفظ کیفیت بالاتر از ۴۸۰KB ماند";
+            if (canceled) {
+                runOnUiThread(() -> {
+                    toast("تبدیل لغو شد.");
+                    showHome(true);
+                });
+                return;
             }
-            finishBusy(message, false);
+
+            lastOutputBytes = bytes;
+            final int ok = success;
+            final int bad = failed;
+            runOnUiThread(() -> showSuccess(ok, bad));
         });
+    }
+
+    private void showProgressScreen() {
+        screenMode = 1;
+        progressStatuses.clear();
+
+        ScrollView scroll = baseScroll();
+        LinearLayout root = baseRoot();
+        scroll.addView(root);
+
+        TextView title = titleText("در حال تبدیل تصاویر");
+        root.addView(title, fullWidth());
+
+        ringProgress = new RingProgress(this);
+        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(dp(170), dp(170));
+        rp.gravity = Gravity.CENTER_HORIZONTAL;
+        rp.topMargin = dp(18);
+        root.addView(ringProgress, rp);
+
+        TextView state = titleText("در حال تبدیل…");
+        state.setTextSize(20);
+        state.setGravity(Gravity.CENTER);
+        root.addView(state, fullWidth());
+
+        TextView sub = smallText("در حال پردازش فایل‌های انتخاب‌شده\nلطفاً کمی صبر کنید");
+        sub.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams subp = fullWidth();
+        subp.topMargin = dp(5);
+        root.addView(sub, subp);
+
+        LinearLayout list = whiteCard();
+        LinearLayout.LayoutParams lp = fullWidth();
+        lp.topMargin = dp(18);
+        root.addView(list, lp);
+
+        for (int i = 0; i < selectedUris.size(); i++) {
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(12), dp(10), dp(12), dp(10));
+            row.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+
+            TextView status = new TextView(this);
+            status.setText("در انتظار…");
+            status.setTextColor(MUTED);
+            status.setTextSize(12);
+            status.setGravity(Gravity.CENTER);
+            status.setTypeface(null, Typeface.BOLD);
+            row.addView(status, new LinearLayout.LayoutParams(dp(92), dp(42)));
+            progressStatuses.add(status);
+
+            TextView name = new TextView(this);
+            name.setText(displayName(selectedUris.get(i)));
+            name.setTextColor(TEXT);
+            name.setTextSize(12.5f);
+            name.setSingleLine(true);
+            name.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+            row.addView(name, new LinearLayout.LayoutParams(0, dp(42), 1f));
+
+            TextView index = new TextView(this);
+            index.setText(toPersianDigits(String.format(Locale.US, "%02d", i + 1)));
+            index.setTextColor(Color.WHITE);
+            index.setGravity(Gravity.CENTER);
+            index.setTypeface(null, Typeface.BOLD);
+            index.setBackground(gradient(BLUE, PURPLE, 12));
+            LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(42), dp(42));
+            ip.leftMargin = dp(8);
+            row.addView(index, ip);
+
+            list.addView(row, fullWidth());
+            if (i < selectedUris.size() - 1) {
+                View divider = new View(this);
+                divider.setBackgroundColor(Color.rgb(237, 239, 247));
+                list.addView(divider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+            }
+        }
+
+        TextView cancel = secondaryAction("لغو تبدیل");
+        LinearLayout.LayoutParams cp = fullWidth();
+        cp.topMargin = dp(15);
+        cp.bottomMargin = dp(16);
+        root.addView(cancel, cp);
+        cancel.setOnClickListener(v -> {
+            cancelRequested = true;
+            cancel.setText("در حال لغو…");
+            cancel.setEnabled(false);
+        });
+
+        showScreen(scroll, true);
+    }
+
+    private void setProgressState(int index, String text, int color) {
+        runOnUiThread(() -> {
+            if (index >= 0 && index < progressStatuses.size()) {
+                TextView s = progressStatuses.get(index);
+                s.setText(text);
+                s.setTextColor(color);
+            }
+        });
+    }
+
+    private void updateRing(int done, int total) {
+        int percent = total == 0 ? 0 : Math.round(done * 100f / total);
+        runOnUiThread(() -> {
+            if (ringProgress != null) ringProgress.setProgress(percent);
+        });
+    }
+
+    private void showSuccess(int success, int failed) {
+        screenMode = 2;
+
+        ScrollView scroll = baseScroll();
+        LinearLayout root = baseRoot();
+        scroll.addView(root);
+
+        TextView top = titleText("تبدیل با موفقیت انجام شد");
+        root.addView(top, fullWidth());
+
+        TextView check = new TextView(this);
+        check.setText("✓");
+        check.setTextSize(54);
+        check.setTextColor(Color.WHITE);
+        check.setGravity(Gravity.CENTER);
+        check.setTypeface(null, Typeface.BOLD);
+        check.setBackground(roundRect(GREEN, 52));
+        LinearLayout.LayoutParams chp = new LinearLayout.LayoutParams(dp(104), dp(104));
+        chp.gravity = Gravity.CENTER_HORIZONTAL;
+        chp.topMargin = dp(24);
+        root.addView(check, chp);
+
+        TextView message = titleText("آماده شد!");
+        message.setTextSize(23);
+        message.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams mp = fullWidth();
+        mp.topMargin = dp(16);
+        root.addView(message, mp);
+
+        TextView detail = smallText(
+                toPersianDigits(String.valueOf(success)) + " فایل با موفقیت به JPG تبدیل شد"
+                        + (failed > 0 ? "\n" + toPersianDigits(String.valueOf(failed)) + " فایل با خطا مواجه شد" : "")
+                        + (lastWasZip ? "\nو در یک فایل ZIP قرار گرفت" : "\nو در پوشه انتخاب‌شده ذخیره شد"));
+        detail.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams dp1 = fullWidth();
+        dp1.topMargin = dp(7);
+        root.addView(detail, dp1);
+
+        LinearLayout resultCard = whiteCard();
+        resultCard.setOrientation(LinearLayout.HORIZONTAL);
+        resultCard.setGravity(Gravity.CENTER_VERTICAL);
+        resultCard.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+        LinearLayout.LayoutParams rcp = fullWidth();
+        rcp.topMargin = dp(22);
+        root.addView(resultCard, rcp);
+
+        TextView fileIcon = new TextView(this);
+        fileIcon.setText(lastWasZip ? "ZIP" : "JPG");
+        fileIcon.setTextColor(Color.WHITE);
+        fileIcon.setTextSize(12);
+        fileIcon.setGravity(Gravity.CENTER);
+        fileIcon.setTypeface(null, Typeface.BOLD);
+        fileIcon.setBackground(roundRect(lastWasZip ? Color.rgb(235, 73, 91) : GREEN, 14));
+        resultCard.addView(fileIcon, new LinearLayout.LayoutParams(dp(56), dp(62)));
+
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        info.setPadding(dp(12), 0, dp(8), 0);
+        resultCard.addView(info, new LinearLayout.LayoutParams(0, dp(70), 1f));
+
+        TextView name = new TextView(this);
+        name.setText(lastOutputName);
+        name.setTextColor(TEXT);
+        name.setTextSize(14);
+        name.setTypeface(null, Typeface.BOLD);
+        name.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        name.setSingleLine(true);
+        info.addView(name, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        TextView size = smallText(formatBytes(lastOutputBytes));
+        size.setGravity(Gravity.START);
+        info.addView(size, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        if (lastWasZip) {
+            TextView viewZip = primaryAction("مشاهده فایل ZIP   ▰");
+            LinearLayout.LayoutParams vp = fullWidth();
+            vp.topMargin = dp(18);
+            root.addView(viewZip, vp);
+            viewZip.setOnClickListener(v -> viewZip());
+
+            TextView share = secondaryAction("اشتراک‌گذاری   ↗");
+            LinearLayout.LayoutParams shp = fullWidth();
+            shp.topMargin = dp(10);
+            root.addView(share, shp);
+            share.setOnClickListener(v -> shareZip());
+        }
+
+        TextView home = secondaryAction("بازگشت به صفحه اصلی  ⌂");
+        LinearLayout.LayoutParams hp = fullWidth();
+        hp.topMargin = dp(10);
+        hp.bottomMargin = dp(18);
+        root.addView(home, hp);
+        home.setOnClickListener(v -> {
+            selectedUris.clear();
+            showHome(true);
+        });
+
+        showScreen(scroll, true);
+    }
+
+    private void viewZip() {
+        if (lastOutputUri == null) return;
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW);
+            intent.setDataAndType(lastOutputUri, "application/zip");
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(intent, "باز کردن فایل ZIP"));
+        } catch (Exception e) {
+            toast("برنامه‌ای برای باز کردن ZIP پیدا نشد.");
+        }
+    }
+
+    private void shareZip() {
+        if (lastOutputUri == null) return;
+        try {
+            Intent intent = new Intent(Intent.ACTION_SEND);
+            intent.setType("application/zip");
+            intent.putExtra(Intent.EXTRA_STREAM, lastOutputUri);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(intent, "اشتراک‌گذاری فایل ZIP"));
+        } catch (Exception e) {
+            toast("اشتراک‌گذاری ممکن نشد.");
+        }
     }
 
     private EncodedJpeg convertOne(Uri uri, boolean targetMode) throws IOException {
         Bitmap bitmap = decodeBitmap(uri);
-
         try {
-            if (!targetMode) {
-                return new EncodedJpeg(compress(bitmap, 100), 100);
-            }
-
+            if (!targetMode) return new EncodedJpeg(compress(bitmap, 100), 100);
             return compressNear480Kb(bitmap);
         } finally {
-            bitmap.recycle();
+            if (!bitmap.isRecycled()) bitmap.recycle();
         }
     }
 
@@ -413,13 +849,9 @@ public class MainActivity extends Activity {
         boolean ownsWorking = false;
 
         try {
-            // اول تلاش می‌کنیم بدون تغییر ابعاد، بهترین کیفیتی را پیدا کنیم.
             EncodedJpeg direct = findBestQualityAtOrBelow(working, 98, MIN_TARGET_QUALITY, TARGET_BYTES);
-            if (direct != null) {
-                return direct;
-            }
+            if (direct != null) return direct;
 
-            // اگر حتی Quality 70 هم بزرگ بود، ابعاد را به‌صورت تدریجی و هوشمند کم می‌کنیم.
             for (int pass = 0; pass < 8; pass++) {
                 byte[] probe = compress(working, 82);
                 double ratio = Math.sqrt((TARGET_BYTES * 0.92d) / Math.max(1d, probe.length));
@@ -428,42 +860,27 @@ public class MainActivity extends Activity {
                 int newWidth = Math.max(900, (int) Math.round(working.getWidth() * scale));
                 int newHeight = Math.max(900, (int) Math.round(working.getHeight() * scale));
 
-                // نسبت تصویر را حفظ کن و اجازه نده یکی از اضلاع بی‌دلیل کشیده شود.
                 if (working.getWidth() >= working.getHeight()) {
                     newHeight = Math.max(1, (int) Math.round((double) working.getHeight() * newWidth / working.getWidth()));
                 } else {
                     newWidth = Math.max(1, (int) Math.round((double) working.getWidth() * newHeight / working.getHeight()));
                 }
 
-                if (newWidth >= working.getWidth() || newHeight >= working.getHeight()) {
-                    break;
-                }
+                if (newWidth >= working.getWidth() || newHeight >= working.getHeight()) break;
 
                 Bitmap scaled = Bitmap.createScaledBitmap(working, newWidth, newHeight, true);
-                if (ownsWorking && working != source && !working.isRecycled()) {
-                    working.recycle();
-                }
+                if (ownsWorking && working != source && !working.isRecycled()) working.recycle();
                 working = scaled;
                 ownsWorking = true;
 
-                EncodedJpeg candidate = findBestQualityAtOrBelow(
-                        working, 96, MIN_TARGET_QUALITY, TARGET_BYTES);
-                if (candidate != null) {
-                    return candidate;
-                }
-
-                if (working.getWidth() <= 900 || working.getHeight() <= 900) {
-                    break;
-                }
+                EncodedJpeg candidate = findBestQualityAtOrBelow(working, 96, MIN_TARGET_QUALITY, TARGET_BYTES);
+                if (candidate != null) return candidate;
+                if (working.getWidth() <= 900 || working.getHeight() <= 900) break;
             }
 
-            // حالت نادر: برای تضمین نزدیک‌شدن به ۴۸۰KB، کیفیت را کمی پایین‌تر جستجو کن.
             EncodedJpeg fallback = findBestQualityAtOrBelow(working, MIN_TARGET_QUALITY - 1, 45, TARGET_BYTES);
-            if (fallback != null) {
-                return fallback;
-            }
+            if (fallback != null) return fallback;
 
-            // آخرین راه: کوچک‌سازی نهایی با Quality 70.
             Bitmap last = working;
             for (int i = 0; i < 4; i++) {
                 int newWidth = Math.max(640, (int) Math.round(last.getWidth() * 0.82d));
@@ -484,18 +901,13 @@ public class MainActivity extends Activity {
                 if (candidate != null) return candidate;
             }
 
-            // اگر یک تصویر بسیار پیچیده باشد، کم‌حجم‌ترین خروجی امن را برگردان.
             return new EncodedJpeg(compress(working, 45), 45);
         } finally {
-            if (ownsWorking && working != source && !working.isRecycled()) {
-                working.recycle();
-            }
+            if (ownsWorking && working != source && !working.isRecycled()) working.recycle();
         }
     }
 
-    private EncodedJpeg findBestQualityAtOrBelow(
-            Bitmap bitmap, int highQuality, int lowQuality, int maxBytes) throws IOException {
-
+    private EncodedJpeg findBestQualityAtOrBelow(Bitmap bitmap, int highQuality, int lowQuality, int maxBytes) throws IOException {
         byte[] lowBytes = compress(bitmap, lowQuality);
         if (lowBytes.length > maxBytes) return null;
 
@@ -507,7 +919,6 @@ public class MainActivity extends Activity {
         while (low <= high) {
             int mid = (low + high) >>> 1;
             byte[] candidate = compress(bitmap, mid);
-
             if (candidate.length <= maxBytes) {
                 best = candidate;
                 bestQuality = mid;
@@ -516,14 +927,12 @@ public class MainActivity extends Activity {
                 high = mid - 1;
             }
         }
-
         return new EncodedJpeg(best, bestQuality);
     }
 
     private Bitmap decodeBitmap(Uri uri) throws IOException {
         Throwable lastError = null;
 
-        // مسیر اول: دیکودر استاندارد اندروید
         try (InputStream in = getContentResolver().openInputStream(uri)) {
             if (in != null) {
                 Bitmap bitmap = BitmapFactory.decodeStream(in);
@@ -533,7 +942,6 @@ public class MainActivity extends Activity {
             lastError = e;
         }
 
-        // مسیر دوم: ImageDecoder در اندروید 9 به بالا
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             try {
                 ImageDecoder.Source source = ImageDecoder.createSource(getContentResolver(), uri);
@@ -547,7 +955,6 @@ public class MainActivity extends Activity {
             }
         }
 
-        // مسیر سوم و مستقل: libheif؛ برای HEICهایی که دیکودر خود گوشی پشتیبانی نمی‌کند.
         try (InputStream in = getContentResolver().openInputStream(uri)) {
             if (in != null) {
                 Bitmap bitmap = HeifBitmapFactory.decodeStream(in);
@@ -563,20 +970,14 @@ public class MainActivity extends Activity {
 
     private byte[] compress(Bitmap bitmap, int quality) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        if (!bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)) {
-            throw new IOException("تبدیل JPEG ناموفق بود");
-        }
-
+        if (!bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)) throw new IOException("تبدیل JPEG ناموفق بود");
         byte[] bytes = out.toByteArray();
-        if (!isRealJpeg(bytes)) {
-            throw new IOException("خروجی ساخته‌شده JPEG معتبر نیست");
-        }
+        if (!isRealJpeg(bytes)) throw new IOException("خروجی JPEG معتبر نیست");
         return bytes;
     }
 
     private boolean isRealJpeg(byte[] bytes) {
-        return bytes != null
-                && bytes.length >= 4
+        return bytes != null && bytes.length >= 4
                 && (bytes[0] & 0xFF) == 0xFF
                 && (bytes[1] & 0xFF) == 0xD8
                 && (bytes[bytes.length - 2] & 0xFF) == 0xFF
@@ -593,12 +994,7 @@ public class MainActivity extends Activity {
     }
 
     private String displayName(Uri uri) {
-        try (Cursor cursor = getContentResolver().query(
-                uri,
-                new String[]{OpenableColumns.DISPLAY_NAME},
-                null,
-                null,
-                null)) {
+        try (Cursor cursor = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
             if (cursor != null && cursor.moveToFirst()) {
                 int index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
                 if (index >= 0) {
@@ -606,36 +1002,30 @@ public class MainActivity extends Activity {
                     if (value != null && !value.trim().isEmpty()) return value;
                 }
             }
-        } catch (Exception ignored) {
-        }
+        } catch (Exception ignored) {}
         return "image.heic";
     }
 
-    private void updateProgress(int done, int total, String text) {
-        int percent = total == 0 ? 0 : Math.round(done * 100f / total);
-        runOnUiThread(() -> {
-            progressBar.setProgress(percent);
-            statusText.setText(text);
-        });
+    private long querySize(Uri uri) {
+        try (Cursor cursor = getContentResolver().query(uri, new String[]{OpenableColumns.SIZE}, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst()) {
+                int index = cursor.getColumnIndex(OpenableColumns.SIZE);
+                if (index >= 0 && !cursor.isNull(index)) return cursor.getLong(index);
+            }
+        } catch (Exception ignored) {}
+        return 0;
     }
 
-    private void setBusy(boolean busy, String text) {
-        pickButton.setEnabled(!busy);
-        zipButton.setEnabled(!busy);
-        folderButton.setEnabled(!busy);
-        maxQualityRadio.setEnabled(!busy);
-        target480Radio.setEnabled(!busy);
-        progressBar.setVisibility(busy ? View.VISIBLE : View.GONE);
-        progressBar.setProgress(0);
-        statusText.setText(text);
+    private String formatBytes(long bytes) {
+        if (bytes <= 0) return "—";
+        if (bytes < 1024) return toPersianDigits(bytes + " بایت");
+        double kb = bytes / 1024.0;
+        if (kb < 1024) return toPersianDigits(String.format(Locale.US, "%.0f KB", kb));
+        return toPersianDigits(String.format(Locale.US, "%.2f مگابایت", kb / 1024.0));
     }
 
-    private void finishBusy(String message, boolean error) {
-        runOnUiThread(() -> {
-            setBusy(false, message);
-            progressBar.setProgress(error ? 0 : 100);
-            Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
-        });
+    private String timestamp() {
+        return new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
     }
 
     private String safeMessage(Exception e) {
@@ -643,75 +1033,121 @@ public class MainActivity extends Activity {
         return message == null || message.trim().isEmpty() ? e.getClass().getSimpleName() : message;
     }
 
-    private String timestamp() {
-        return new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
+    private String toPersianDigits(String input) {
+        String[] en = {"0","1","2","3","4","5","6","7","8","9"};
+        String[] fa = {"۰","۱","۲","۳","۴","۵","۶","۷","۸","۹"};
+        for (int i = 0; i < 10; i++) input = input.replace(en[i], fa[i]);
+        return input;
     }
 
-    private TextView label(String text) {
-        TextView view = new TextView(this);
-        view.setText(text);
-        view.setTextSize(16);
-        view.setTextColor(Color.rgb(17, 24, 39));
-        view.setTypeface(null, android.graphics.Typeface.BOLD);
-        view.setGravity(Gravity.START);
-        return view;
+    private ScrollView baseScroll() {
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(BG);
+        scroll.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        return scroll;
     }
 
-    private TextView normalText(String text) {
-        TextView view = new TextView(this);
-        view.setText(text);
-        view.setTextSize(14);
-        view.setTextColor(Color.rgb(75, 85, 99));
-        view.setGravity(Gravity.START);
-        return view;
+    private LinearLayout baseRoot() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(16), dp(20), dp(16), dp(20));
+        root.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+        return root;
     }
 
-    private RadioButton radio(String text) {
-        RadioButton button = new RadioButton(this);
+    private LinearLayout whiteCard() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(14), dp(14), dp(14), dp(14));
+        card.setBackground(roundRect(Color.WHITE, 22));
+        card.setElevation(dp(2));
+        return card;
+    }
+
+    private TextView titleText(String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextColor(TEXT);
+        t.setTextSize(22);
+        t.setTypeface(null, Typeface.BOLD);
+        t.setGravity(Gravity.CENTER);
+        return t;
+    }
+
+    private TextView smallText(String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextColor(MUTED);
+        t.setTextSize(12.5f);
+        t.setGravity(Gravity.END);
+        t.setLineSpacing(0, 1.2f);
+        return t;
+    }
+
+    private TextView primaryAction(String text) {
+        TextView button = new TextView(this);
         button.setText(text);
-        button.setTextSize(14);
-        button.setTextColor(Color.rgb(31, 41, 55));
-        button.setButtonTintList(ColorStateList.valueOf(Color.rgb(79, 70, 229)));
-        button.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-        button.setPadding(0, dp(4), 0, dp(4));
-        return button;
-    }
-
-    private Button primaryButton(String text) {
-        Button button = new Button(this);
-        button.setText(text);
-        button.setTextSize(15);
         button.setTextColor(Color.WHITE);
-        button.setAllCaps(false);
-        button.setMinHeight(dp(52));
+        button.setTextSize(16);
         button.setGravity(Gravity.CENTER);
-        button.setBackground(roundRect(Color.rgb(79, 70, 229), 16));
+        button.setTypeface(null, Typeface.BOLD);
+        button.setMinHeight(dp(58));
+        button.setPadding(dp(12), dp(14), dp(12), dp(14));
+        button.setBackground(gradient(BLUE, PURPLE, 19));
+        button.setElevation(dp(6));
         return button;
     }
 
-    private Button secondaryButton(String text) {
-        Button button = new Button(this);
+    private TextView secondaryAction(String text) {
+        TextView button = new TextView(this);
         button.setText(text);
+        button.setTextColor(Color.rgb(61, 67, 102));
         button.setTextSize(15);
-        button.setTextColor(Color.rgb(55, 48, 163));
-        button.setAllCaps(false);
-        button.setMinHeight(dp(52));
         button.setGravity(Gravity.CENTER);
-        button.setBackground(roundRect(Color.rgb(238, 242, 255), 16));
+        button.setTypeface(null, Typeface.BOLD);
+        button.setMinHeight(dp(54));
+        button.setPadding(dp(12), dp(13), dp(12), dp(13));
+        button.setBackground(roundRect(Color.rgb(237, 239, 248), 18));
         return button;
     }
 
-    private GradientDrawable roundRect(int color, int radiusDp) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(color);
-        drawable.setCornerRadius(dp(radiusDp));
-        return drawable;
+    private GradientDrawable roundRect(int color, int radius) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(color);
+        d.setCornerRadius(dp(radius));
+        return d;
     }
 
-    private LinearLayout.LayoutParams matchWrap() {
-        return new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
+    private GradientDrawable gradient(int c1, int c2, int radius) {
+        GradientDrawable d = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{c1, c2});
+        d.setCornerRadius(dp(radius));
+        return d;
+    }
+
+    private GradientDrawable optionBackground(boolean selected) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(selected ? Color.rgb(250, 249, 255) : Color.WHITE);
+        d.setCornerRadius(dp(18));
+        d.setStroke(dp(selected ? 2 : 1), selected ? PURPLE : Color.rgb(229, 232, 242));
+        return d;
+    }
+
+    private LinearLayout.LayoutParams fullWidth() {
+        return new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+    }
+
+    private void showScreen(View view, boolean animate) {
+        setContentView(view);
+        if (animate) {
+            view.setAlpha(0f);
+            view.setTranslationY(dp(12));
+            view.animate().alpha(1f).translationY(0).setDuration(220).start();
+        }
+    }
+
+    private void toast(String text) {
+        Toast.makeText(this, text, Toast.LENGTH_LONG).show();
     }
 
     private int dp(int value) {
@@ -719,18 +1155,80 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    public void onBackPressed() {
+        if (screenMode == 1) {
+            cancelRequested = true;
+            toast("درخواست لغو ثبت شد.");
+            return;
+        }
+        if (screenMode == 2) {
+            showHome(true);
+            return;
+        }
+        super.onBackPressed();
+    }
+
+    @Override
     protected void onDestroy() {
         executor.shutdownNow();
+        thumbnailExecutor.shutdownNow();
         super.onDestroy();
     }
 
     private static final class EncodedJpeg {
         final byte[] bytes;
         final int quality;
-
         EncodedJpeg(byte[] bytes, int quality) {
             this.bytes = bytes;
             this.quality = quality;
+        }
+    }
+
+    private static final class RingProgress extends View {
+        private final Paint track = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint arc = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint text = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private int progress = 0;
+
+        RingProgress(Activity context) {
+            super(context);
+            track.setStyle(Paint.Style.STROKE);
+            track.setStrokeCap(Paint.Cap.ROUND);
+            track.setStrokeWidth(context.getResources().getDisplayMetrics().density * 12f);
+            track.setColor(Color.rgb(229, 233, 245));
+
+            arc.setStyle(Paint.Style.STROKE);
+            arc.setStrokeCap(Paint.Cap.ROUND);
+            arc.setStrokeWidth(context.getResources().getDisplayMetrics().density * 12f);
+            arc.setColor(Color.rgb(72, 89, 244));
+
+            text.setTextAlign(Paint.Align.CENTER);
+            text.setTypeface(Typeface.DEFAULT_BOLD);
+            text.setTextSize(context.getResources().getDisplayMetrics().scaledDensity * 29f);
+            text.setColor(Color.rgb(20, 28, 54));
+        }
+
+        void setProgress(int value) {
+            progress = Math.max(0, Math.min(100, value));
+            invalidate();
+        }
+
+        @Override
+        protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float stroke = arc.getStrokeWidth();
+            RectF rect = new RectF(stroke, stroke, getWidth() - stroke, getHeight() - stroke);
+            canvas.drawArc(rect, -90, 360, false, track);
+            canvas.drawArc(rect, -90, 360f * progress / 100f, false, arc);
+            Paint.FontMetrics fm = text.getFontMetrics();
+            float y = getHeight() / 2f - (fm.ascent + fm.descent) / 2f;
+            canvas.drawText(toPersian(progress) + "٪", getWidth() / 2f, y, text);
+        }
+
+        private String toPersian(int value) {
+            return String.valueOf(value)
+                    .replace("0","۰").replace("1","۱").replace("2","۲").replace("3","۳").replace("4","۴")
+                    .replace("5","۵").replace("6","۶").replace("7","۷").replace("8","۸").replace("9","۹");
         }
     }
 }

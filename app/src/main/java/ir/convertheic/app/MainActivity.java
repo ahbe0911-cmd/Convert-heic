@@ -58,7 +58,9 @@ public class MainActivity extends Activity {
     private static final int REQ_PICK_FOLDER = 102;
 
     private static final int TARGET_BYTES = 480 * 1024;
-    private static final int MIN_TARGET_QUALITY = 70;
+    private static final int QUALITY_SOFT_CAP_BYTES = 520 * 1024;
+    private static final int MIN_TARGET_QUALITY = 82;
+    private static final int LAST_RESORT_QUALITY = 80;
 
     private static final int BG = Color.rgb(247, 248, 253);
     private static final int TEXT = Color.rgb(20, 28, 54);
@@ -210,7 +212,7 @@ public class MainActivity extends Activity {
         addSectionTitle(root, "کیفیت خروجی");
         LinearLayout qualityRow = optionRow();
         root.addView(qualityRow, fullWidth());
-        quality480Card = optionCard("۴۸۰", "حجم حدود ۴۸۰KB", "کم‌حجم و مناسب اشتراک", GREEN, false,
+        quality480Card = optionCard("۴۸۰", "حدود ۴۸۰KB", "کیفیت بهتر • جزئیات بیشتر", GREEN, false,
                 v -> { target480Mode = true; refreshOptionCards(); pulse(quality480Card); });
         qualityMaxCard = optionCard("◆", "کیفیت حداکثری", "بالاترین کیفیت تصویر", PURPLE, true,
                 v -> { target480Mode = false; refreshOptionCards(); pulse(qualityMaxCard); });
@@ -907,66 +909,66 @@ public class MainActivity extends Activity {
     }
 
     private EncodedJpeg compressNear480Kb(Bitmap source) throws IOException {
+        // هدف این حالت «حدود ۴۸۰KB با کیفیت دیداری خوب» است، نه فشرده‌سازی تهاجمی.
+        // برای جلوگیری از تار شدن، کیفیت JPEG پایین‌تر از ۸۰ نمی‌رود و ضلع بلند
+        // تا حد ممکن بزرگ نگه داشته می‌شود.
+
+        EncodedJpeg original = findBestQualityAtOrBelow(
+                source, 96, MIN_TARGET_QUALITY, QUALITY_SOFT_CAP_BYTES);
+        if (original != null) return original;
+
+        int sourceLongEdge = Math.max(source.getWidth(), source.getHeight());
+        int[] preferredLongEdges = new int[]{2560, 2304, 2160, 2048, 1920, 1800, 1600, 1440};
+
         Bitmap working = source;
         boolean ownsWorking = false;
 
         try {
-            EncodedJpeg direct = findBestQualityAtOrBelow(working, 98, MIN_TARGET_QUALITY, TARGET_BYTES);
-            if (direct != null) return direct;
+            for (int targetLongEdge : preferredLongEdges) {
+                if (sourceLongEdge <= targetLongEdge) continue;
 
-            for (int pass = 0; pass < 8; pass++) {
-                byte[] probe = compress(working, 82);
-                double ratio = Math.sqrt((TARGET_BYTES * 0.92d) / Math.max(1d, probe.length));
-                double scale = Math.max(0.68d, Math.min(0.92d, ratio));
+                Bitmap scaled = scaleToLongEdge(source, targetLongEdge);
+                if (scaled == null) continue;
 
-                int newWidth = Math.max(900, (int) Math.round(working.getWidth() * scale));
-                int newHeight = Math.max(900, (int) Math.round(working.getHeight() * scale));
-
-                if (working.getWidth() >= working.getHeight()) {
-                    newHeight = Math.max(1, (int) Math.round((double) working.getHeight() * newWidth / working.getWidth()));
-                } else {
-                    newWidth = Math.max(1, (int) Math.round((double) working.getWidth() * newHeight / working.getHeight()));
+                if (ownsWorking && working != source && !working.isRecycled()) {
+                    working.recycle();
                 }
-
-                if (newWidth >= working.getWidth() || newHeight >= working.getHeight()) break;
-
-                Bitmap scaled = Bitmap.createScaledBitmap(working, newWidth, newHeight, true);
-                if (ownsWorking && working != source && !working.isRecycled()) working.recycle();
                 working = scaled;
                 ownsWorking = true;
 
-                EncodedJpeg candidate = findBestQualityAtOrBelow(working, 96, MIN_TARGET_QUALITY, TARGET_BYTES);
-                if (candidate != null) return candidate;
-                if (working.getWidth() <= 900 || working.getHeight() <= 900) break;
-            }
-
-            EncodedJpeg fallback = findBestQualityAtOrBelow(working, MIN_TARGET_QUALITY - 1, 45, TARGET_BYTES);
-            if (fallback != null) return fallback;
-
-            Bitmap last = working;
-            for (int i = 0; i < 4; i++) {
-                int newWidth = Math.max(640, (int) Math.round(last.getWidth() * 0.82d));
-                int newHeight = Math.max(640, (int) Math.round(last.getHeight() * 0.82d));
-                if (last.getWidth() >= last.getHeight()) {
-                    newHeight = Math.max(1, (int) Math.round((double) last.getHeight() * newWidth / last.getWidth()));
-                } else {
-                    newWidth = Math.max(1, (int) Math.round((double) last.getWidth() * newHeight / last.getHeight()));
-                }
-
-                Bitmap scaled = Bitmap.createScaledBitmap(last, newWidth, newHeight, true);
-                if (last != source && !last.isRecycled()) last.recycle();
-                last = scaled;
-                working = scaled;
-                ownsWorking = true;
-
-                EncodedJpeg candidate = findBestQualityAtOrBelow(last, 90, 45, TARGET_BYTES);
+                EncodedJpeg candidate = findBestQualityAtOrBelow(
+                        working, 96, MIN_TARGET_QUALITY, QUALITY_SOFT_CAP_BYTES);
                 if (candidate != null) return candidate;
             }
 
-            return new EncodedJpeg(compress(working, 45), 45);
+            // آخرین راه: هنوز کیفیت را حداقل ۸۰ نگه می‌داریم.
+            // اگر ۱۴۴۰px هم کمی بیشتر از ۴۸۰KB شد، کیفیت را قربانی نمی‌کنیم.
+            if (working == source) {
+                working = scaleToLongEdge(source, 1440);
+                ownsWorking = working != source;
+            }
+
+            byte[] finalBytes = compress(working, LAST_RESORT_QUALITY);
+            return new EncodedJpeg(finalBytes, LAST_RESORT_QUALITY);
         } finally {
-            if (ownsWorking && working != source && !working.isRecycled()) working.recycle();
+            if (ownsWorking && working != source && working != null && !working.isRecycled()) {
+                working.recycle();
+            }
         }
+    }
+
+    private Bitmap scaleToLongEdge(Bitmap source, int targetLongEdge) {
+        int width = source.getWidth();
+        int height = source.getHeight();
+        int longEdge = Math.max(width, height);
+
+        if (longEdge <= targetLongEdge) return source;
+
+        double scale = targetLongEdge / (double) longEdge;
+        int newWidth = Math.max(1, (int) Math.round(width * scale));
+        int newHeight = Math.max(1, (int) Math.round(height * scale));
+
+        return Bitmap.createScaledBitmap(source, newWidth, newHeight, true);
     }
 
     private EncodedJpeg findBestQualityAtOrBelow(Bitmap bitmap, int highQuality, int lowQuality, int maxBytes) throws IOException {

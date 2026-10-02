@@ -28,5 +28,5 @@ android {
 }
 
 dependencies {
-    implementation 'com.github.msisuzney:GlideHeifDecoder:0.5'
+    implementation 'com.github.msisuzney.GlideHeifDecoder:heifdecoder:0.5'
 }

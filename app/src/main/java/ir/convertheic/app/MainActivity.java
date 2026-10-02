@@ -57,10 +57,9 @@ public class MainActivity extends Activity {
     private static final int REQ_SAVE_ZIP = 101;
     private static final int REQ_PICK_FOLDER = 102;
 
-    private static final int TARGET_BYTES = 480 * 1024;
-    private static final int QUALITY_SOFT_CAP_BYTES = 520 * 1024;
-    private static final int MIN_TARGET_QUALITY = 82;
-    private static final int LAST_RESORT_QUALITY = 80;
+    private static final int MAX_OUTPUT_BYTES = 490 * 1024;
+        private static final int MIN_TARGET_QUALITY = 84;
+    private static final int LAST_RESORT_QUALITY = 78;
 
     private static final int BG = Color.rgb(247, 248, 253);
     private static final int TEXT = Color.rgb(20, 28, 54);
@@ -75,7 +74,7 @@ public class MainActivity extends Activity {
     private final ExecutorService thumbnailExecutor = Executors.newFixedThreadPool(2);
     private final ArrayList<TextView> progressStatuses = new ArrayList<>();
 
-    private boolean target480Mode = false;
+    private boolean target490Mode = false;
     private boolean zipMode = true;
     private volatile boolean cancelRequested = false;
     private int screenMode = 0; // 0 home, 1 progress, 2 success
@@ -84,7 +83,7 @@ public class MainActivity extends Activity {
     private LinearLayout selectedThumbs;
     private TextView selectedSummary;
     private LinearLayout qualityMaxCard;
-    private LinearLayout quality480Card;
+    private LinearLayout quality490Card;
     private LinearLayout outputZipCard;
     private LinearLayout outputFolderCard;
 
@@ -212,11 +211,11 @@ public class MainActivity extends Activity {
         addSectionTitle(root, "کیفیت خروجی");
         LinearLayout qualityRow = optionRow();
         root.addView(qualityRow, fullWidth());
-        quality480Card = optionCard("۴۸۰", "حدود ۴۸۰KB", "کیفیت بهتر • جزئیات بیشتر", GREEN, false,
-                v -> { target480Mode = true; refreshOptionCards(); pulse(quality480Card); });
+        quality490Card = optionCard("۴۹۰", "حداکثر ۴۹۰KB", "کیفیت بالا • سقف قطعی حجم", GREEN, false,
+                v -> { target490Mode = true; refreshOptionCards(); pulse(quality490Card); });
         qualityMaxCard = optionCard("◆", "کیفیت حداکثری", "بالاترین کیفیت تصویر", PURPLE, true,
-                v -> { target480Mode = false; refreshOptionCards(); pulse(qualityMaxCard); });
-        qualityRow.addView(quality480Card, weightedCard(true));
+                v -> { target490Mode = false; refreshOptionCards(); pulse(qualityMaxCard); });
+        qualityRow.addView(quality490Card, weightedCard(true));
         qualityRow.addView(qualityMaxCard, weightedCard(false));
 
         addSectionTitle(root, "نوع خروجی");
@@ -372,8 +371,8 @@ public class MainActivity extends Activity {
 
     private void refreshOptionCards() {
         if (qualityMaxCard == null) return;
-        applyOptionStyle(qualityMaxCard, !target480Mode);
-        applyOptionStyle(quality480Card, target480Mode);
+        applyOptionStyle(qualityMaxCard, !target490Mode);
+        applyOptionStyle(quality490Card, target490Mode);
         applyOptionStyle(outputZipCard, zipMode);
         applyOptionStyle(outputFolderCard, !zipMode);
     }
@@ -547,7 +546,7 @@ public class MainActivity extends Activity {
         showProgressScreen();
 
         final List<Uri> inputs = new ArrayList<>(selectedUris);
-        final boolean targetMode = target480Mode;
+        final boolean targetMode = target490Mode;
 
         executor.execute(() -> {
             int success = 0;
@@ -608,7 +607,7 @@ public class MainActivity extends Activity {
         showProgressScreen();
 
         final List<Uri> inputs = new ArrayList<>(selectedUris);
-        final boolean targetMode = target480Mode;
+        final boolean targetMode = target490Mode;
 
         executor.execute(() -> {
             int success = 0;
@@ -902,33 +901,55 @@ public class MainActivity extends Activity {
         Bitmap bitmap = decodeBitmap(uri);
         try {
             if (!targetMode) return new EncodedJpeg(compress(bitmap, 100), 100);
-            return compressNear480Kb(bitmap);
+            return compressMax490Kb(bitmap);
         } finally {
             if (!bitmap.isRecycled()) bitmap.recycle();
         }
     }
 
-    private EncodedJpeg compressNear480Kb(Bitmap source) throws IOException {
-        // هدف این حالت «حدود ۴۸۰KB با کیفیت دیداری خوب» است، نه فشرده‌سازی تهاجمی.
-        // برای جلوگیری از تار شدن، کیفیت JPEG پایین‌تر از ۸۰ نمی‌رود و ضلع بلند
-        // تا حد ممکن بزرگ نگه داشته می‌شود.
+    private EncodedJpeg compressMax490Kb(Bitmap source) throws IOException {
+        // قانون این حالت: هر JPG حتماً <= 490KB باشد.
+        // برای کیفیت بهتر، Quality را حداقل 84 نگه می‌داریم و فقط در صورت نیاز
+        // رزولوشن را تدریجی کم می‌کنیم؛ این کار از ایجاد آرتیفکت‌های شدید JPEG
+        // که در نسخه قبلی دیده می‌شد جلوگیری می‌کند.
 
-        EncodedJpeg original = findBestQualityAtOrBelow(
-                source, 96, MIN_TARGET_QUALITY, QUALITY_SOFT_CAP_BYTES);
-        if (original != null) return original;
-
-        int sourceLongEdge = Math.max(source.getWidth(), source.getHeight());
-        int[] preferredLongEdges = new int[]{2560, 2304, 2160, 2048, 1920, 1800, 1600, 1440};
+        EncodedJpeg direct = findBestQualityAtOrBelow(
+                source, 97, MIN_TARGET_QUALITY, MAX_OUTPUT_BYTES);
+        if (direct != null) return direct;
 
         Bitmap working = source;
         boolean ownsWorking = false;
 
         try {
-            for (int targetLongEdge : preferredLongEdges) {
-                if (sourceLongEdge <= targetLongEdge) continue;
+            for (int pass = 0; pass < 14; pass++) {
+                byte[] probe = compress(working, MIN_TARGET_QUALITY);
+                if (probe.length <= MAX_OUTPUT_BYTES) {
+                    EncodedJpeg best = findBestQualityAtOrBelow(
+                            working, 97, MIN_TARGET_QUALITY, MAX_OUTPUT_BYTES);
+                    if (best != null) return best;
+                }
 
-                Bitmap scaled = scaleToLongEdge(source, targetLongEdge);
-                if (scaled == null) continue;
+                int width = working.getWidth();
+                int height = working.getHeight();
+                int longEdge = Math.max(width, height);
+
+                // نسبت کاهش براساس حجم واقعی عکس محاسبه می‌شود؛ با کمی حاشیه
+                // تا خروجی نهایی بعد از جست‌وجوی Quality زیر 490KB بماند.
+                double ratio = Math.sqrt(
+                        (MAX_OUTPUT_BYTES * 0.94d) / Math.max(1d, probe.length));
+                double scale = Math.max(0.74d, Math.min(0.92d, ratio));
+
+                int targetLongEdge = (int) Math.floor(longEdge * scale);
+                if (targetLongEdge >= longEdge) targetLongEdge = longEdge - 64;
+                if (targetLongEdge < 360) targetLongEdge = 360;
+
+                Bitmap scaled = scaleToLongEdge(working, targetLongEdge);
+                if (scaled == working) {
+                    targetLongEdge = Math.max(320, longEdge - 96);
+                    scaled = scaleToLongEdge(working, targetLongEdge);
+                }
+
+                if (scaled == working) break;
 
                 if (ownsWorking && working != source && !working.isRecycled()) {
                     working.recycle();
@@ -937,18 +958,41 @@ public class MainActivity extends Activity {
                 ownsWorking = true;
 
                 EncodedJpeg candidate = findBestQualityAtOrBelow(
-                        working, 96, MIN_TARGET_QUALITY, QUALITY_SOFT_CAP_BYTES);
+                        working, 97, MIN_TARGET_QUALITY, MAX_OUTPUT_BYTES);
                 if (candidate != null) return candidate;
             }
 
-            // آخرین راه: هنوز کیفیت را حداقل ۸۰ نگه می‌داریم.
-            // اگر ۱۴۴۰px هم کمی بیشتر از ۴۸۰KB شد، کیفیت را قربانی نمی‌کنیم.
-            if (working == source) {
-                working = scaleToLongEdge(source, 1440);
-                ownsWorking = working != source;
+            // مسیر نادر برای تصاویر بسیار پرجزئیات/نویزدار.
+            // ابتدا همان رزولوشن باقی‌مانده را با Quality تا 78 امتحان می‌کنیم.
+            EncodedJpeg fallback = findBestQualityAtOrBelow(
+                    working, MIN_TARGET_QUALITY - 1, LAST_RESORT_QUALITY, MAX_OUTPUT_BYTES);
+            if (fallback != null) return fallback;
+
+            // تضمین سخت سقف 490KB: رزولوشن را تا زمانی که Q78 جا شود کاهش می‌دهیم.
+            while (Math.max(working.getWidth(), working.getHeight()) > 160) {
+                int longEdge = Math.max(working.getWidth(), working.getHeight());
+                int nextLong = Math.max(160, (int) Math.floor(longEdge * 0.82d));
+                Bitmap scaled = scaleToLongEdge(working, nextLong);
+                if (scaled == working) break;
+
+                if (ownsWorking && working != source && !working.isRecycled()) {
+                    working.recycle();
+                }
+                working = scaled;
+                ownsWorking = true;
+
+                byte[] bytes = compress(working, LAST_RESORT_QUALITY);
+                if (bytes.length <= MAX_OUTPUT_BYTES) {
+                    EncodedJpeg best = findBestQualityAtOrBelow(
+                            working, 92, LAST_RESORT_QUALITY, MAX_OUTPUT_BYTES);
+                    return best != null ? best : new EncodedJpeg(bytes, LAST_RESORT_QUALITY);
+                }
             }
 
             byte[] finalBytes = compress(working, LAST_RESORT_QUALITY);
+            if (finalBytes.length > MAX_OUTPUT_BYTES) {
+                throw new IOException("امکان رساندن این تصویر به سقف ۴۹۰KB وجود نداشت");
+            }
             return new EncodedJpeg(finalBytes, LAST_RESORT_QUALITY);
         } finally {
             if (ownsWorking && working != source && working != null && !working.isRecycled()) {
